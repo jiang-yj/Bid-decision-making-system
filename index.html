@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>投标决策辅助系统 · BDSS</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body x-data="bdssApp()" x-init="init()" x-cloak>
+
+<!-- F0 合规提示条：不可永久关闭，仅本次会话可折叠 -->
+<div class="compliance-banner" x-show="!ui.complianceDismissed" x-transition>
+  <div class="compliance-inner">
+    <span class="compliance-icon">⚖</span>
+    <span class="compliance-text" x-text="complianceNotice"></span>
+    <button class="compliance-close" @click="ui.complianceDismissed = true" title="本次会话折叠（重启后再次显示）">本次折叠</button>
+  </div>
+</div>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <h1 class="brand">投标决策辅助系统 <span class="brand-sub">BDSS · 单机版</span></h1>
+  </div>
+  <div class="topbar-center">
+    <label class="scheme-select">
+      <span>当前方案：</span>
+      <select x-model="currentSchemeId" @change="loadScheme(currentSchemeId)">
+        <option value="">— 选择方案 —</option>
+        <template x-for="s in schemeList" :key="s.id">
+          <option :value="s.id" x-text="(s.pinned ? '★ ' : '') + s.name"></option>
+        </template>
+      </select>
+    </label>
+  </div>
+  <div class="topbar-right">
+    <button class="btn btn-sm" @click="newScheme()">新建</button>
+    <button class="btn btn-sm" @click="saveScheme()">保存</button>
+    <button class="btn btn-sm" @click="copyScheme()">复制</button>
+    <button class="btn btn-sm" @click="showManager = true">方案管理</button>
+    <button class="btn btn-sm" @click="exportJSON()">导出JSON</button>
+    <label class="btn btn-sm">导入JSON<input type="file" accept=".json" @change="importJSON($event)" hidden /></label>
+    <button class="btn btn-sm btn-ghost" @click="runSelfTest()">自检</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- F1 左侧配置面板 -->
+  <aside class="config-panel">
+    <details open>
+      <summary>① 项目信息</summary>
+      <div class="form-grid">
+        <label>项目名称<input x-model="s.project.name" type="text" /></label>
+        <label>项目编号<input x-model="s.project.code" type="text" /></label>
+        <label>标段<input x-model="s.project.section" type="text" /></label>
+        <label>最高投标限价 C_max<input x-model.number="s.project.C_max" type="number" step="0.01" /></label>
+        <label>成本警戒线<input x-model.number="s.project.costWarningLine" type="number" step="0.01" /></label>
+        <label>币种
+          <select x-model="s.project.currency">
+            <template x-for="c in defaults.currencies" :key="c.code">
+              <option :value="c.code" x-text="c.code + ' ' + c.symbol + ' ' + c.name"></option>
+            </template>
+          </select>
+        </label>
+      </div>
+    </details>
+
+    <details open>
+      <summary>② 基准价模型</summary>
+      <div class="form-grid">
+        <label class="full">报价模型
+          <select x-model="s.pricingModel.type" @change="onPricingModelChange()">
+            <template x-for="m in defaults.pricingModelTypes" :key="m.value">
+              <option :value="m.value" x-text="m.label"></option>
+            </template>
+          </select>
+        </label>
+        <div class="full model-desc" x-text="modelReadable"></div>
+
+        <template x-if="s.pricingModel.type === 'C'">
+          <label class="full">下浮系数 K<input x-model.number="s.pricingModel.params.K" type="number" step="0.001" /></label>
+        </template>
+
+        <template x-if="s.pricingModel.type === 'D'">
+          <div class="full">
+            <div class="sub-hint">复合权重组件（权重自动归一）</div>
+            <table class="mini-table">
+              <thead><tr><th>权重</th><th>来源</th><th></th></tr></thead>
+              <tbody>
+                <template x-for="(c, i) in s.pricingModel.params.components || []" :key="i">
+                  <tr>
+                    <td><input x-model.number="c.w" type="number" step="0.01" /></td>
+                    <td>
+                      <select x-model="c.src">
+                        <option value="avg">平均报价</option>
+                        <option value="C_max">控制价</option>
+                        <option value="min">最低报价</option>
+                        <option value="max">最高报价</option>
+                        <option value="median">中位数</option>
+                      </select>
+                    </td>
+                    <td><button class="btn btn-xs" @click="s.pricingModel.params.components.splice(i,1)">删</button></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+            <button class="btn btn-xs" @click="addComposite()">+ 添加组件</button>
+          </div>
+        </template>
+
+        <template x-if="s.pricingModel.type === 'custom'">
+          <div class="full">
+            <label>自定义公式<input x-model="s.pricingModel.params.formula" type="text" placeholder="如：mean(Q)*0.98" /></label>
+            <div class="sub-hint">可用变量：Q, n, C_max, mean, min, max, median, K；函数：abs/min/max/round/floor/ceil/sqrt/log/exp/pow</div>
+            <button class="btn btn-xs" @click="validateFormula()">校验公式</button>
+            <span class="hint" x-text="formulaStatus"></span>
+          </div>
+        </template>
+      </div>
+    </details>
+
+    <details open>
+      <summary>③ 得分规则</summary>
+      <div class="form-grid">
+        <label>商务标满分 S_max<input x-model.number="s.scoring.S_max" type="number" step="0.01" /></label>
+        <label>得分模式
+          <select x-model="s.scoring.mode">
+            <template x-for="m in defaults.scoringModes" :key="m.value">
+              <option :value="m.value" x-text="m.label"></option>
+            </template>
+          </select>
+        </label>
+        <template x-if="s.scoring.mode === 'linear'">
+          <div class="full form-grid">
+            <label>高于基准每1%扣 a<input x-model.number="s.scoring.a" type="number" step="0.01" /></label>
+            <label>低于基准每1%扣 b<input x-model.number="s.scoring.b" type="number" step="0.01" /></label>
+          </div>
+        </template>
+        <template x-if="s.scoring.mode === 'segmented'">
+          <div class="full">
+            <div class="sub-hint">分段扣分（偏离区间 [%]，每1%扣 [per] 分，上限 [cap]）</div>
+            <table class="mini-table">
+              <thead><tr><th>下限%</th><th>上限%</th><th>每1%扣</th><th>上限</th><th></th></tr></thead>
+              <tbody>
+                <template x-for="(seg, i) in s.scoring.segments" :key="i">
+                  <tr>
+                    <td><input x-model.number="seg.lo" type="number" step="0.1" /></td>
+                    <td><input x-model.number="seg.hi" type="number" step="0.1" /></td>
+                    <td><input x-model.number="seg.per" type="number" step="0.01" /></td>
+                    <td><input x-model.number="seg.cap" type="number" step="0.01" /></td>
+                    <td><button class="btn btn-xs" @click="s.scoring.segments.splice(i,1)">删</button></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+            <button class="btn btn-xs" @click="s.scoring.segments.push({lo:0,hi:1,per:1,cap:60})">+ 添加段</button>
+          </div>
+        </template>
+        <label>舍入方式
+          <select x-model="s.scoring.rounding">
+            <template x-for="r in defaults.roundingModes" :key="r.value">
+              <option :value="r.value" x-text="r.label"></option>
+            </template>
+          </select>
+        </label>
+        <label>保留小数位<input x-model.number="s.scoring.roundDecimals" type="number" step="1" /></label>
+        <label>得分下限<input x-model.number="s.scoring.floorScore" type="number" step="0.01" /></label>
+      </div>
+    </details>
+
+    <details open>
+      <summary>④ 废标规则</summary>
+      <div class="form-grid">
+        <label class="checkbox"><input type="checkbox" x-model="s.invalidRules.overCmaxInvalid" /> 超过限价视为无效标</label>
+        <label>低于成本处理
+          <select x-model="s.invalidRules.belowCost">
+            <template x-for="b in defaults.belowCostActions" :key="b.value">
+              <option :value="b.value" x-text="b.label"></option>
+            </template>
+          </select>
+        </label>
+        <label>随机废标概率 p_reject (%)<input x-model.number="s.invalidRules.p_reject" type="number" step="0.1" /></label>
+        <label>最少有效投标人数<input x-model.number="s.invalidRules.minValidBidders" type="number" step="1" /></label>
+      </div>
+    </details>
+
+    <details open>
+      <summary>⑤ 伙伴投标人 <span class="count-badge" x-text="s.partners.length"></span></summary>
+      <div class="partners-list">
+        <template x-for="(p, i) in s.partners" :key="p.id">
+          <div class="partner-card" :class="{ disabled: !p.enabled }">
+            <div class="partner-head">
+              <label class="checkbox"><input type="checkbox" x-model="p.enabled" /> 启用</label>
+              <input class="partner-name" x-model="p.name" type="text" placeholder="伙伴名称" />
+              <button class="btn btn-xs" @click="s.partners.splice(i,1)">删</button>
+            </div>
+            <div class="form-grid">
+              <label class="full">设定方式
+                <select x-model="p.method">
+                  <template x-for="m in defaults.partnerMethods" :key="m.value">
+                    <option :value="m.value" x-text="m.label"></option>
+                  </template>
+                </select>
+              </label>
+              <template x-if="p.method === 'fixed'">
+                <label class="full">固定报价（绝对值）<input x-model.number="p.fixedQuote" type="number" step="0.01" /></label>
+              </template>
+              <template x-if="p.method === 'narrow'">
+                <div class="full form-grid">
+                  <label>中心 (%)<input x-model.number="p.narrow.center" type="number" step="0.01" /></label>
+                  <label>偏差 (%)<input x-model.number="p.narrow.spread" type="number" step="0.01" /></label>
+                  <label>分布类型
+                    <select x-model="p.narrow.dist">
+                      <template x-for="d in defaults.narrowDistTypes" :key="d.value">
+                        <option :value="d.value" x-text="d.label"></option>
+                      </template>
+                    </select>
+                  </label>
+                </div>
+              </template>
+              <template x-if="p.method === 'sample'">
+                <label class="full">历史样本（逗号分隔的绝对值报价）
+                  <textarea x-model="sampleText[i]" rows="2" @input="parseSamples(i)" placeholder="9500000,9480000,9620000"></textarea>
+                </label>
+              </template>
+              <label class="checkbox full"><input type="checkbox" x-model="p.forceValid" /> 强制有效（忽略废标规则，置信度低）</label>
+            </div>
+          </div>
+        </template>
+        <button class="btn btn-sm" @click="addPartner()">+ 添加伙伴</button>
+      </div>
+    </details>
+
+    <details open>
+      <summary>⑥ 随机对手</summary>
+      <div class="form-grid">
+        <label>随机对手数量<input x-model.number="s.opponents.count" type="number" step="1" /></label>
+        <div class="full">
+          <div class="sub-hint">分布列表（按顺序循环分配给每个对手；参数 ≤1 视为限价百分比，自动转绝对值）</div>
+          <table class="mini-table">
+            <thead><tr><th>类型</th><th>参数</th><th>组</th><th></th></tr></thead>
+            <tbody>
+              <template x-for="(d, i) in s.opponents.distributions" :key="d.id">
+                <tr>
+                  <td>
+                    <select x-model="d.type">
+                      <template x-for="t in defaults.opponentDistTypes" :key="t.value">
+                        <option :value="t.value" x-text="t.label"></option>
+                      </template>
+                    </select>
+                  </td>
+                  <td><input class="dist-params" x-model="distParamText[i]" type="text" @input="parseDistParams(i)" placeholder="min=0.9,max=0.98" /></td>
+                  <td><input x-model="d.group" type="text" size="3" /></td>
+                  <td><button class="btn btn-xs" @click="s.opponents.distributions.splice(i,1)">删</button></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <button class="btn btn-xs" @click="addDist()">+ 添加分布</button>
+        </div>
+        <label class="full">历史 CSV（可选，用于经验分布）
+          <textarea x-model="s.opponents.csv" rows="3" placeholder="项目编号,投标单位,报价,限价,报价率&#10;ZB-2023-001,单位A,9650000,10000000,0.965"></textarea>
+        </label>
+      </div>
+    </details>
+
+    <details open>
+      <summary>⑦ 我方策略</summary>
+      <div class="form-grid">
+        <label class="full">候选价模式
+          <select x-model="s.strategy.candidateMode">
+            <option value="range">区间扫描</option>
+            <option value="list">指定列表</option>
+          </select>
+        </label>
+        <template x-if="s.strategy.candidateMode === 'range'">
+          <div class="full form-grid">
+            <label>折扣下限 (%)<input x-model.number="s.strategy.range.discountMin" type="number" step="0.1" /></label>
+            <label>折扣上限 (%)<input x-model.number="s.strategy.range.discountMax" type="number" step="0.1" /></label>
+            <label>步长 (%)<input x-model.number="s.strategy.range.step" type="number" step="0.01" /></label>
+            <label>相对基准
+              <select x-model="s.strategy.range.relativeTo">
+                <option value="C_max">最高限价</option>
+              </select>
+            </label>
+          </div>
+        </template>
+        <template x-if="s.strategy.candidateMode === 'list'">
+          <label class="full">候选价（逗号分隔的绝对值）
+            <textarea x-model="strategyListText" rows="2" @input="parseStrategyList()" placeholder="9500000,9600000,9700000"></textarea>
+          </label>
+        </template>
+        <div class="full candidate-preview">
+          候选价将生成 <strong x-text="candidates.length"></strong> 个，范围：
+          <span x-text="candidates.length ? (candidates[0].toFixed(2) + ' ~ ' + candidates[candidates.length-1].toFixed(2)) : '—'"></span>
+        </div>
+      </div>
+    </details>
+
+    <details open>
+      <summary>⑧ 模拟参数</summary>
+      <div class="form-grid">
+        <label>蒙特卡洛迭代次数<input x-model.number="s.simulation.iterations" type="number" step="100" /></label>
+        <label>随机种子<input x-model.number="s.simulation.seed" type="number" step="1" /></label>
+        <label class="checkbox"><input type="checkbox" x-model="s.simulation.useWorker" /> 启用 Worker（并行加速）</label>
+        <label>进度回报间隔<input x-model.number="s.simulation.progressEvery" type="number" step="100" /></label>
+      </div>
+    </details>
+
+    <details>
+      <summary>⑨ 场景矩阵 <span class="count-badge" x-text="s.scenarios.length"></span></summary>
+      <div class="scenarios-list">
+        <template x-for="(sc, i) in s.scenarios" :key="sc.id">
+          <div class="scenario-card">
+            <div class="scenario-head">
+              <label class="checkbox"><input type="checkbox" x-model="sc.enabled" /> 启用</label>
+              <input class="scenario-name" x-model="sc.name" type="text" />
+              <select x-model="sc.type">
+                <template x-for="t in defaults.scenarioTypes" :key="t.value">
+                  <option :value="t.value" x-text="t.label"></option>
+                </template>
+              </select>
+              <button class="btn btn-xs" @click="s.scenarios.splice(i,1)">删</button>
+            </div>
+            <template x-if="sc.type === 'partnerShift'">
+              <label>偏移量 (%)<input x-model.number="sc.params.shiftPct" type="number" step="0.1" /></label>
+            </template>
+            <template x-if="sc.type === 'rejectPartner'">
+              <label>废标伙伴 ID
+                <select x-model="sc.params.partnerId">
+                  <template x-for="p in s.partners" :key="p.id">
+                    <option :value="p.id" x-text="p.name"></option>
+                  </template>
+                </select>
+              </label>
+            </template>
+          </div>
+        </template>
+        <button class="btn btn-sm" @click="addScenario()">+ 添加场景</button>
+      </div>
+    </details>
+  </aside>
+
+  <!-- F2/F3 右侧结果面板 -->
+  <section class="results-panel">
+
+    <div class="action-bar">
+      <button class="btn btn-primary" @click="runSinglePoint()" :disabled="running">单点测算</button>
+      <button class="btn btn-primary" @click="runBatch()" :disabled="running">批量扫描</button>
+      <button class="btn btn-primary" @click="runScenarios()" :disabled="running || s.scenarios.filter(x=>x.enabled).length===0">场景对比</button>
+      <button class="btn btn-warn" @click="abortRun()" x-show="running" :disabled="!running">中止</button>
+      <span class="separator"></span>
+      <button class="btn btn-sm" @click="exportCSV()" :disabled="!batchStats">导出CSV</button>
+      <button class="btn btn-sm" @click="exportPNG()" :disabled="!batchStats">导出图表PNG</button>
+      <button class="btn btn-sm" @click="exportMarkdown()" :disabled="!batchStats">导出Markdown</button>
+      <button class="btn btn-sm" @click="printReport()" :disabled="!batchStats">打印报告</button>
+    </div>
+
+    <div class="progress-wrap" x-show="running || progress.done > 0">
+      <div class="progress-bar">
+        <div class="progress-fill" :style="'width:' + progressPct + '%'"></div>
+      </div>
+      <span class="progress-text" x-text="progressText"></span>
+    </div>
+
+    <!-- 校验与警告 -->
+    <div class="validation-box" x-show="validation.errors.length || validation.warnings.length">
+      <template x-if="validation.errors.length">
+        <div class="val-errors">
+          <strong>校验错误：</strong>
+          <template x-for="e in validation.errors" :key="e">
+            <div class="val-item err" x-text="'• ' + e"></div>
+          </template>
+        </div>
+      </template>
+      <template x-if="validation.warnings.length">
+        <div class="val-warns">
+          <strong>提示：</strong>
+          <template x-for="w in validation.warnings" :key="w">
+            <div class="val-item warn" x-text="'• ' + w"></div>
+          </template>
+        </div>
+      </template>
+    </div>
+
+    <!-- F2-1 单点测算结果 -->
+    <details class="result-block" open x-show="singleResult">
+      <summary>F2-1 单点测算结果</summary>
+      <div class="result-body" x-show="singleResult">
+        <div class="kpis">
+          <div class="kpi"><span class="kpi-label">基准价 B</span><span class="kpi-val" x-text="singleResult ? fmt(singleResult.basePrice) : '-'"></span></div>
+          <div class="kpi"><span class="kpi-label">我方排名</span><span class="kpi-val" x-text="singleResult ? singleResult.myRank : '-'"></span></div>
+          <div class="kpi"><span class="kpi-label">有效家数</span><span class="kpi-val" x-text="singleResult ? singleResult.validCount : '-'"></span></div>
+          <div class="kpi"><span class="kpi-label">低置信</span><span class="kpi-val" x-text="singleResult ? (singleResult.lowConfidence ? '是' : '否') : '-'"></span></div>
+        </div>
+        <div id="singleTable" class="table-host"></div>
+      </div>
+    </details>
+
+    <!-- F2-2 批量扫描结果 -->
+    <details class="result-block" open x-show="batchStats">
+      <summary>F2-2 批量扫描结果（<span x-text="batchStats ? batchStats.length : 0"></span> 个候选价）</summary>
+      <div class="result-body" x-show="batchStats">
+        <div id="chartWinProb" class="chart-host"></div>
+        <div id="chartScoreDist" class="chart-host"></div>
+        <div id="chartRankDist" class="chart-host"></div>
+        <div id="batchTable" class="table-host"></div>
+      </div>
+    </details>
+
+    <!-- F2-3 场景对比 -->
+    <details class="result-block" x-show="scenarioStats && scenarioStats.length">
+      <summary>F2-3 场景对比</summary>
+      <div class="result-body" x-show="scenarioStats && scenarioStats.length">
+        <div id="chartScenario" class="chart-host"></div>
+        <div id="scenarioTable" class="table-host"></div>
+      </div>
+    </details>
+
+    <!-- F3 智能分析 -->
+    <details class="result-block" open x-show="conclusions">
+      <summary>F3 智能分析结论</summary>
+      <div class="result-body markdown-host" x-show="conclusions">
+        <div class="conclusion-grid">
+          <div class="concl-card">
+            <h4>建议报价</h4>
+            <div class="markdown-body" x-html="conclusionsHtml"></div>
+          </div>
+          <div class="concl-card" x-show="conclusions && conclusions.partnerEcho && conclusions.partnerEcho.hasPartners">
+            <h4>伙伴表回显</h4>
+            <div id="partnerEchoTable" class="table-host"></div>
+          </div>
+        </div>
+        <div class="concl-card full" x-show="conclusions && conclusions.robustness">
+          <h4>稳健性分析</h4>
+          <div class="markdown-body" x-text="conclusions && conclusions.robustness ? conclusions.robustness.text : ''"></div>
+        </div>
+        <div class="concl-card full" x-show="conclusions && conclusions.risks && conclusions.risks.items && conclusions.risks.items.length">
+          <h4>风险提示</h4>
+          <ul class="risk-list">
+            <template x-for="r in (conclusions && conclusions.risks ? conclusions.risks.items : [])" :key="r">
+              <li x-text="r"></li>
+            </template>
+          </ul>
+        </div>
+      </div>
+    </details>
+
+    <!-- 报告底部合规回显 -->
+    <div class="report-compliance" x-show="batchStats || singleResult">
+      <h5>合规声明</h5>
+      <p x-text="complianceNotice"></p>
+      <p class="legal-ref">依据：《中华人民共和国招标投标法》第三十二条、第五十三条；《实施条例》第三十九条至第四十一条。本系统不提供、不建议任何与其他投标人协调报价的方案。</p>
+    </div>
+
+  </section>
+</main>
+
+<!-- 方案管理弹窗 -->
+<div class="modal-mask" x-show="showManager" @click.self="showManager = false" x-transition>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>方案管理</h3>
+      <button class="btn btn-xs" @click="showManager = false">关闭</button>
+    </div>
+    <div class="modal-body">
+      <table class="data-table">
+        <thead>
+          <tr><th>名称</th><th>限价</th><th>模型</th><th>伙伴</th><th>对手</th><th>更新时间</th><th>操作</th></tr>
+        </thead>
+        <tbody>
+          <template x-for="row in schemeList" :key="row.id">
+            <tr>
+              <td x-text="(row.pinned ? '★ ' : '') + row.name"></td>
+              <td x-text="fmt(row.summary.C_max)"></td>
+              <td x-text="row.summary.model"></td>
+              <td x-text="row.summary.partners"></td>
+              <td x-text="row.summary.opponents"></td>
+              <td x-text="fmtDate(row.updatedAt)"></td>
+              <td class="actions">
+                <button class="btn btn-xs" @click="loadScheme(row.id); showManager=false">载入</button>
+                <button class="btn btn-xs" @click="renameScheme(row.id)">改名</button>
+                <button class="btn btn-xs" @click="copySchemeById(row.id)">复制</button>
+                <button class="btn btn-xs" @click="togglePin(row.id)">置顶</button>
+                <button class="btn btn-xs btn-danger" @click="deleteScheme(row.id)">删除</button>
+              </td>
+            </tr>
+          </template>
+          <tr x-show="schemeList.length === 0">
+            <td colspan="7" class="empty">暂无方案</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="modal-actions">
+        <button class="btn btn-sm" @click="installExamples()">载入内置示例</button>
+        <button class="btn btn-sm" @click="loadCSVExample()">载入历史CSV样本</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 自检结果弹窗 -->
+<div class="modal-mask" x-show="showSelfTest" @click.self="showSelfTest = false" x-transition>
+  <div class="modal">
+    <div class="modal-head">
+      <h3>自检报告</h3>
+      <button class="btn btn-xs" @click="showSelfTest = false">关闭</button>
+    </div>
+    <div class="modal-body markdown-body" x-html="selfTestHtml"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" x-show="toast.show" x-transition x-text="toast.text"></div>
+
+<footer class="footer">
+  <span>投标决策辅助系统 BDSS · 纯前端单机版 · 数据本地存储 · 不上传任何信息</span>
+</footer>
+
+<!-- 脚本加载顺序：BDSS 核心模块先行（确保 window.bdssApp 就绪），Alpine 最后加载启动 -->
+<script src="data/defaults.js"></script>
+<script src="data/examples.js"></script>
+<script src="js/config.js"></script>
+<script src="js/rng.js"></script>
+<script src="js/model.js"></script>
+<script src="js/simulator.js"></script>
+<script src="js/analyzer.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/worker-manager.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/selftest.js"></script>
+<script src="js/app.js"></script>
+<!-- CDN 依赖：ECharts（图表，离线时自动降级为表格）+ Alpine（最后加载，启动时 bdssApp 已就绪） -->
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
+
+</body>
+</html>
