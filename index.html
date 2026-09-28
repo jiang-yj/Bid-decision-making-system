@@ -5,22 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>投标决策辅助系统 · BDSS</title>
 <link rel="stylesheet" href="styles.css" />
-<!-- CDN 依赖：ECharts + Alpine（defer，按顺序加载；离线时图表降级为表格 -->
-<script defer src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
-<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
-<!-- BDSS 核心脚本（defer，保证 Alpine 启动前 BDSS.* 与 bdssApp 已就绪） -->
-<script defer src="data/defaults.js"></script>
-<script defer src="data/examples.js"></script>
-<script defer src="js/config.js"></script>
-<script defer src="js/rng.js"></script>
-<script defer src="js/model.js"></script>
-<script defer src="js/simulator.js"></script>
-<script defer src="js/analyzer.js"></script>
-<script defer src="js/storage.js"></script>
-<script defer src="js/worker-manager.js"></script>
-<script defer src="js/ui.js"></script>
-<script defer src="js/selftest.js"></script>
-<script defer src="js/app.js"></script>
 </head>
 <body x-data="bdssApp()" x-init="init()" x-cloak>
 
@@ -532,6 +516,23 @@
 <footer class="footer">
   <span>投标决策辅助系统 BDSS · 纯前端单机版 · 数据本地存储 · 不上传任何信息</span>
 </footer>
+
+<!-- 脚本加载顺序：BDSS 核心模块先行（确保 window.bdssApp 就绪），Alpine 最后加载启动 -->
+<script src="data/defaults.js"></script>
+<script src="data/examples.js"></script>
+<script src="js/config.js"></script>
+<script src="js/rng.js"></script>
+<script src="js/model.js"></script>
+<script src="js/simulator.js"></script>
+<script src="js/analyzer.js"></script>
+<script src="js/storage.js"></script>
+<script src="js/worker-manager.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/selftest.js"></script>
+<script src="js/app.js"></script>
+<!-- CDN 依赖：ECharts（图表，离线时自动降级为表格）+ Alpine（最后加载，启动时 bdssApp 已就绪） -->
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
 
 </body>
 </html>
