@@ -389,8 +389,6 @@
         var opts = this._buildRunOpts();
         var scheme = this.s;
 
-        var useWorker = scheme.simulation.useWorker && (typeof Worker !== 'undefined');
-
         function onProgress(done, total, elapsed, eta) {
           self.progress = { done: done, total: total, elapsedMs: elapsed, etaMs: eta };
         }
@@ -400,6 +398,18 @@
           var stats = BDSS.analyzer.aggregateBatch(rawResults);
           self.batchStats = stats;
           var conclusions = BDSS.analyzer.autoConclusions(stats, scheme, {});
+          // 防御：所有候选价有效轮次为 0 时 recommendations 为 null，给出可操作的降级文案
+          if (!conclusions.recommendations) {
+            conclusions.recommendations = {
+              best: null, conservative: null, neutral: null, aggressive: null, range: null,
+              text: '## 分析结论\n\n' +
+                '⚠ 当前参数下有效模拟轮次为 0，无法生成建议价。可能原因：\n\n' +
+                '1. 随机对手分布参数非法（如均匀分布 min ≥ max，或参数与分布类型不匹配）；\n' +
+                '2. 我方折扣区间全部超限价或低于成本警戒线；\n' +
+                '3. 有效投标家数始终不足（检查对手数量与最少有效家数）。\n\n' +
+                '请调整左侧配置后重新扫描。'
+            };
+          }
           self.conclusions = conclusions;
           self.conclusionsHtml = BDSS.ui.markdownToHtml(conclusions.recommendations.text);
           // 渲染
@@ -417,17 +427,9 @@
           console.error('[BDSS] runBatch error:', msg);
         }
 
-        if (useWorker) {
-          this._abortHandle = BDSS.workerManager.runBatch(scheme, cands, opts, onProgress, onDone, onError);
-        } else {
-          // 主线程降级
-          var abortFlag = { aborted: false };
-          this._abortHandle = { abort: function () { abortFlag.aborted = true; } };
-          try {
-            var raw = BDSS.simulator.runBatch(scheme, cands, opts, onProgress, abortFlag);
-            onDone(raw);
-          } catch (e) { onError(e.message); }
-        }
+        // 统一交由 workerManager：内部自动处理 Worker / file:// / 降级，
+        // 且所有路径均为分块异步，绝不冻结主线程
+        this._abortHandle = BDSS.workerManager.runBatch(scheme, cands, opts, onProgress, onDone, onError);
       },
 
       runScenarios() {
@@ -444,8 +446,11 @@
         var scheme = this.s;
         var idx = 0;
         var results = [];
+        var scenarioAbort = false;
+        var scenarioTotal = cands.length * this.s.simulation.iterations * enabledScenarios.length;
 
         function next() {
+          if (scenarioAbort) return;
           if (idx >= enabledScenarios.length) {
             self.running = false;
             self._abortHandle = null;
@@ -458,7 +463,9 @@
           var sc = enabledScenarios[idx++];
           var opts = self._buildRunOpts(sc);
           function onProgress(done, total, elapsed, eta) {
-            self.progress = { done: done, total: total, elapsedMs: elapsed, etaMs: eta };
+            // 局部（单场景）进度换算为全局累计：已完成场景 + 当前场景内进度
+            var globalDone = (idx - 1) * total + done;
+            self.progress = { done: globalDone, total: scenarioTotal, elapsedMs: elapsed, etaMs: eta };
           }
           function onDone(raw) {
             results.push({ scenario: sc, batchResult: raw });
@@ -469,15 +476,15 @@
             self._abortHandle = null;
             self.showToast('场景 [' + sc.name + '] 失败：' + msg);
           }
-          if (scheme.simulation.useWorker && typeof Worker !== 'undefined') {
-            self._abortHandle = BDSS.workerManager.runBatch(scheme, cands, opts, onProgress, onDone, onError);
-          } else {
-            var abortFlag = { aborted: false };
-            self._abortHandle = { abort: function () { abortFlag.aborted = true; } };
-            try {
-              onDone(BDSS.simulator.runBatch(scheme, cands, opts, onProgress, abortFlag));
-            } catch (e) { onError(e.message); }
-          }
+          // 统一走 workerManager（内部异步分块，不冻结 UI）
+          var inner = BDSS.workerManager.runBatch(scheme, cands, opts, onProgress, onDone, onError);
+          // 场景级中止：标记后阻止后续场景继续启动
+          self._abortHandle = {
+            abort: function () {
+              scenarioAbort = true;
+              try { inner.abort(); } catch (e) {}
+            }
+          };
         }
         next();
       },
