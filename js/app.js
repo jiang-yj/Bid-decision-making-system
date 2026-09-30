@@ -56,6 +56,15 @@
       // Toast
       toast: { show: false, text: '' },
 
+      // 护眼（暗黑）模式：默认常规白色，选择持久化到 localStorage
+      darkMode: false,
+
+      // 左侧配置标签页（①~⑨）
+      configTab: 'info',
+
+      // 金额显示单位：'yuan'(元,默认) 或 'wan'(万元)
+      amountUnit: 'yuan',
+
       /* ------------------------------------------------------
        * 计算属性（getter 形式，Alpine 模板直接访问）
        * ------------------------------------------------------ */
@@ -77,7 +86,7 @@
         var done = p.done || 0, total = p.total || 0;
         var elapsed = (p.elapsedMs / 1000).toFixed(1);
         var eta = p.etaMs ? (p.etaMs / 1000).toFixed(1) + 's' : '--';
-        return done + ' / ' + total + '（' + elapsed + 's，ETA ' + eta + '）';
+        return done + ' / ' + total + '（' + elapsed + 's，剩余 ' + eta + '）';
       },
 
       /* ------------------------------------------------------
@@ -87,6 +96,10 @@
         var self = this;
         // 监听 toast 事件
         BDSS.bus.on('toast', function (msg) { self.showToast(msg); });
+
+        // 恢复主题偏好（默认常规模式）
+        try { this.darkMode = localStorage.getItem('bdss_theme') === 'dark'; } catch (e) { this.darkMode = false; }
+        this._applyTheme();
 
         // 载入方案列表
         this.refreshSchemeList();
@@ -138,7 +151,11 @@
         if (s.results && s.results.batch) {
           this.batchStats = s.results.batch;
           this.conclusions = s.results.conclusions;
-          this.conclusionsHtml = this.conclusions ? BDSS.ui.markdownToHtml(this.conclusions.recommendations.text) : '';
+          this.conclusionsHtml = (this.conclusions && this.conclusions.recommendations)
+            ? BDSS.ui.markdownToHtml(this.conclusions.recommendations.text) : '';
+          // 重新渲染缓存结果（图表内部会在容器可见后自动重试初始化）
+          BDSS.ui.renderBatchResults(this.batchStats, s);
+          if (this.conclusions) BDSS.ui.renderConclusions(this.conclusions, s);
         } else {
           this.batchStats = null;
           this.conclusions = null;
@@ -146,6 +163,13 @@
         }
         this.singleResult = s.results && s.results.single ? s.results.single : null;
         this.scenarioStats = s.results && s.results.scenarios ? s.results.scenarios : null;
+        if (this.singleResult) {
+          var cur0 = BDSS.defaults.currencies.find(function (c) { return c.code === s.project.currency; });
+          BDSS.ui.renderSinglePoint(this.singleResult, cur0 ? cur0.symbol : '¥');
+        }
+        if (this.scenarioStats && this.scenarioStats.length) {
+          BDSS.ui.renderScenarioComparison(this.scenarioStats, s);
+        }
         this.syncParamTexts();
         this.showToast('已载入：' + s.meta.name);
       },
@@ -370,10 +394,37 @@
         var allBids = [myBid].concat(pRes.bids).concat(oppBids);
         var fullMask = [false].concat(pRes.forceValidMask).concat(oppBids.map(function () { return false; }));
         var result = BDSS.simulator.singlePoint(s, allBids, fullMask);
+
+        // 为单点测算结果补充投标人和排名信息
+        var labels = ['我方'];
+        for (var pi = 0; pi < partners.length; pi++) {
+          labels.push(partners[pi].name || ('伙伴' + (pi + 1)));
+        }
+        for (var oi = 0; oi < oppBids.length; oi++) {
+          labels.push('对手' + (oi + 1));
+        }
+        result.labels = labels;
+
+        // 计算所有有效投标人的排名（分数降序，同分报价低者优先）
+        var validIdx = [];
+        for (var ri = 0; ri < (result.results || []).length; ri++) {
+          if (result.results[ri].valid) validIdx.push(ri);
+        }
+        var ranks = new Array((result.results || []).length).fill(0);
+        validIdx.sort(function (a, b) {
+          var sa = result.results[a].score, sb = result.results[b].score;
+          if (Math.abs(sa - sb) > 1e-9) return sb - sa; // 分数降序
+          return result.results[a].bid - result.results[b].bid; // 同分报价低者优先
+        });
+        for (var rk = 0; rk < validIdx.length; rk++) {
+          ranks[validIdx[rk]] = rk + 1;
+        }
+        result.ranks = ranks;
+
         this.singleResult = result;
         var cur = BDSS.defaults.currencies.find(function (c) { return c.code === s.project.currency; });
         BDSS.ui.renderSinglePoint(result, cur ? cur.symbol : '¥');
-        this.showToast('单点测算完成（候选价 ' + BDSS.ui.fmt(myBid, 0) + '）');
+        this.showToast('单点测算完成（候选价 ' + BDSS.ui.fmtMoney(myBid, 0) + '）');
       },
 
       runBatch() {
@@ -389,8 +440,6 @@
         var opts = this._buildRunOpts();
         var scheme = this.s;
 
-        var useWorker = scheme.simulation.useWorker && (typeof Worker !== 'undefined');
-
         function onProgress(done, total, elapsed, eta) {
           self.progress = { done: done, total: total, elapsedMs: elapsed, etaMs: eta };
         }
@@ -400,6 +449,18 @@
           var stats = BDSS.analyzer.aggregateBatch(rawResults);
           self.batchStats = stats;
           var conclusions = BDSS.analyzer.autoConclusions(stats, scheme, {});
+          // 防御：所有候选价有效轮次为 0 时 recommendations 为 null，给出可操作的降级文案
+          if (!conclusions.recommendations) {
+            conclusions.recommendations = {
+              best: null, conservative: null, neutral: null, aggressive: null, range: null,
+              text: '## 分析结论\n\n' +
+                '⚠ 当前参数下有效模拟轮次为 0，无法生成建议价。可能原因：\n\n' +
+                '1. 随机对手分布参数非法（如均匀分布 min ≥ max，或参数与分布类型不匹配）；\n' +
+                '2. 我方折扣区间全部超限价或低于成本警戒线；\n' +
+                '3. 有效投标家数始终不足（检查对手数量与最少有效家数）。\n\n' +
+                '请调整左侧配置后重新扫描。'
+            };
+          }
           self.conclusions = conclusions;
           self.conclusionsHtml = BDSS.ui.markdownToHtml(conclusions.recommendations.text);
           // 渲染
@@ -417,17 +478,9 @@
           console.error('[BDSS] runBatch error:', msg);
         }
 
-        if (useWorker) {
-          this._abortHandle = BDSS.workerManager.runBatch(scheme, cands, opts, onProgress, onDone, onError);
-        } else {
-          // 主线程降级
-          var abortFlag = { aborted: false };
-          this._abortHandle = { abort: function () { abortFlag.aborted = true; } };
-          try {
-            var raw = BDSS.simulator.runBatch(scheme, cands, opts, onProgress, abortFlag);
-            onDone(raw);
-          } catch (e) { onError(e.message); }
-        }
+        // 统一交由 workerManager：内部自动处理 Worker / file:// / 降级，
+        // 且所有路径均为分块异步，绝不冻结主线程
+        this._abortHandle = BDSS.workerManager.runBatch(scheme, cands, opts, onProgress, onDone, onError);
       },
 
       runScenarios() {
@@ -444,8 +497,12 @@
         var scheme = this.s;
         var idx = 0;
         var results = [];
+        var scenarioAbort = false;
+        var scenarioTotal = cands.length * this.s.simulation.iterations * enabledScenarios.length;
+        var scenarioStartMs = Date.now();
 
         function next() {
+          if (scenarioAbort) return;
           if (idx >= enabledScenarios.length) {
             self.running = false;
             self._abortHandle = null;
@@ -458,7 +515,16 @@
           var sc = enabledScenarios[idx++];
           var opts = self._buildRunOpts(sc);
           function onProgress(done, total, elapsed, eta) {
-            self.progress = { done: done, total: total, elapsedMs: elapsed, etaMs: eta };
+            // 局部（单场景）进度换算为全局累计：已完成场景 + 当前场景内进度
+            var globalDone = (idx - 1) * total + done;
+            // 全局 ETA：基于全局已用时间和已完成量计算，避免单场景切换时 ETA 重置
+            var globalElapsed = Date.now() - scenarioStartMs;
+            var globalEta = 0;
+            if (globalDone > 0 && globalElapsed > 0) {
+              var rate = globalDone / globalElapsed; // items per ms
+              globalEta = (scenarioTotal - globalDone) / rate;
+            }
+            self.progress = { done: globalDone, total: scenarioTotal, elapsedMs: globalElapsed, etaMs: globalEta };
           }
           function onDone(raw) {
             results.push({ scenario: sc, batchResult: raw });
@@ -469,15 +535,15 @@
             self._abortHandle = null;
             self.showToast('场景 [' + sc.name + '] 失败：' + msg);
           }
-          if (scheme.simulation.useWorker && typeof Worker !== 'undefined') {
-            self._abortHandle = BDSS.workerManager.runBatch(scheme, cands, opts, onProgress, onDone, onError);
-          } else {
-            var abortFlag = { aborted: false };
-            self._abortHandle = { abort: function () { abortFlag.aborted = true; } };
-            try {
-              onDone(BDSS.simulator.runBatch(scheme, cands, opts, onProgress, abortFlag));
-            } catch (e) { onError(e.message); }
-          }
+          // 统一走 workerManager（内部异步分块，不冻结 UI）
+          var inner = BDSS.workerManager.runBatch(scheme, cands, opts, onProgress, onDone, onError);
+          // 场景级中止：标记后阻止后续场景继续启动
+          self._abortHandle = {
+            abort: function () {
+              scenarioAbort = true;
+              try { inner.abort(); } catch (e) {}
+            }
+          };
         }
         next();
       },
@@ -538,9 +604,77 @@
       },
 
       /* ------------------------------------------------------
+       * 护眼（暗黑）模式
+       * ------------------------------------------------------ */
+      toggleTheme() {
+        this.darkMode = !this.darkMode;
+        try { localStorage.setItem('bdss_theme', this.darkMode ? 'dark' : 'light'); } catch (e) {}
+        this._applyTheme();
+        // 重新渲染已有图表，使主题立即生效
+        var self = this;
+        this.$nextTick(function () {
+          if (self.batchStats) BDSS.ui.renderBatchResults(self.batchStats, self.s);
+          if (self.conclusions) BDSS.ui.renderConclusions(self.conclusions, self.s);
+          if (self.scenarioStats && self.scenarioStats.length) BDSS.ui.renderScenarioComparison(self.scenarioStats, self.s);
+        });
+        this.showToast(this.darkMode ? '已切换到护眼模式' : '已切换到常规模式');
+      },
+
+      _applyTheme() {
+        if (this.darkMode) document.documentElement.setAttribute('data-theme', 'dark');
+        else document.documentElement.removeAttribute('data-theme');
+      },
+
+      /* ------------------------------------------------------
+       * 金额单位切换
+       * ------------------------------------------------------ */
+      setAmountUnit(unit) {
+        this.amountUnit = unit;
+        BDSS.ui.amountUnit = unit;
+        // 重新渲染表格类结果（图表不随金额开关切换）
+        var self = this;
+        this.$nextTick(function () {
+          if (self.singleResult) {
+            var cur = BDSS.defaults.currencies.find(function (c) { return c.code === self.s.project.currency; });
+            BDSS.ui.renderSinglePoint(self.singleResult, cur ? cur.symbol : '¥');
+          }
+          // 批量表格随单位切换重渲染（图表保持不变）
+          if (self.batchStats) {
+            var bs = self.batchStats;
+            var bestIdx = bs.indexOf(bs.slice().sort(function(a,b){return b.winProb-a.winProb;})[0]);
+            BDSS.ui.renderTable('batchTable',
+              ['报价', '中标概率', '期望得分', '期望排名（均值）', '最差排名', 'P10', 'P50', 'P90', '标准差', '有效轮数'],
+              bs.map(function (s, i) {
+                return {
+                  报价: BDSS.ui.fmtMoneyVal(s.candidate),
+                  中标概率: s.winProb + '%',
+                  期望得分: s.expectedScore,
+                  '期望排名（均值）': s.expectedRank,
+                  最差排名: s.worstRank,
+                  P10: s.scoreP10, P50: s.scoreP50, P90: s.scoreP90,
+                  标准差: s.scoreStd, 有效轮数: s.validRounds,
+                  __best: i === bestIdx
+                };
+              }), '批量扫描明细（★ 最优候选价）');
+          }
+          if (self.conclusions) BDSS.ui.renderConclusions(self.conclusions, self.s);
+        });
+      },
+
+      /* ------------------------------------------------------
        * 工具方法
        * ------------------------------------------------------ */
       fmt(v, dec) { return BDSS.ui.fmt(v, dec); },
+      fmtMoney(v, dec) {
+        // 直接引用 this.amountUnit 确保 Alpine 响应式依赖追踪
+        dec = dec === undefined ? 2 : dec;
+        if (v == null || v === undefined || isNaN(v)) return '-';
+        var n = Number(v);
+        if (this.amountUnit === 'wan') {
+          return (n / 1e4).toLocaleString('zh-CN', { minimumFractionDigits: dec, maximumFractionDigits: dec }) + ' 万元';
+        }
+        return n.toLocaleString('zh-CN', { minimumFractionDigits: dec, maximumFractionDigits: dec }) + ' 元';
+      },
       fmtDate(iso) {
         if (!iso) return '-';
         try { return new Date(iso).toLocaleString('zh-CN'); } catch (e) { return iso; }

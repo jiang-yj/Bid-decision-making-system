@@ -4,6 +4,8 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>投标决策辅助系统 · BDSS</title>
+<!-- 主题初始化：在样式加载前读取本地缓存，避免首次渲染闪烁 -->
+<script>try{if(localStorage.getItem('bdss_theme')==='dark'){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}</script>
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body x-data="bdssApp()" x-init="init()" x-cloak>
@@ -40,15 +42,33 @@
     <button class="btn btn-sm" @click="exportJSON()">导出JSON</button>
     <label class="btn btn-sm">导入JSON<input type="file" accept=".json" @change="importJSON($event)" hidden /></label>
     <button class="btn btn-sm btn-ghost" @click="runSelfTest()">自检</button>
+    <button class="btn btn-sm btn-ghost theme-toggle" @click="toggleTheme()"
+            :title="darkMode ? '切换到常规模式' : '切换到护眼模式'"
+            x-text="darkMode ? '☀ 常规' : '☾ 护眼'"></button>
   </div>
 </header>
 
 <main class="layout">
 
-  <!-- F1 左侧配置面板 -->
+  <!-- F1 左侧配置面板（标签页形式） -->
   <aside class="config-panel">
-    <details open>
-      <summary>① 项目信息</summary>
+    <nav class="config-tabs">
+      <button class="config-tab" :class="{active: configTab==='info'}" @click="configTab='info'">项目信息</button>
+      <button class="config-tab" :class="{active: configTab==='model'}" @click="configTab='model'">基准价模型</button>
+      <button class="config-tab" :class="{active: configTab==='score'}" @click="configTab='score'">得分规则</button>
+      <button class="config-tab" :class="{active: configTab==='invalid'}" @click="configTab='invalid'">废标规则</button>
+      <button class="config-tab" :class="{active: configTab==='partner'}" @click="configTab='partner'">伙伴投标人<span class="tab-badge" x-text="s.partners.length"></span></button>
+      <button class="config-tab" :class="{active: configTab==='opponent'}" @click="configTab='opponent'">随机对手</button>
+      <button class="config-tab" :class="{active: configTab==='strategy'}" @click="configTab='strategy'">我方策略</button>
+      <button class="config-tab" :class="{active: configTab==='sim'}" @click="configTab='sim'">模拟参数</button>
+      <button class="config-tab" :class="{active: configTab==='scenario'}" @click="configTab='scenario'">场景矩阵<span class="tab-badge" x-text="s.scenarios.length"></span></button>
+    </nav>
+
+    <div class="config-body">
+
+    <!-- ① 项目信息 -->
+    <div class="config-section" x-show="configTab==='info'">
+      <h3 class="config-sec-title">① 项目信息</h3>
       <div class="form-grid">
         <label>项目名称<input x-model="s.project.name" type="text" /></label>
         <label>项目编号<input x-model="s.project.code" type="text" /></label>
@@ -63,10 +83,11 @@
           </select>
         </label>
       </div>
-    </details>
+    </div>
 
-    <details open>
-      <summary>② 基准价模型</summary>
+    <!-- ② 基准价模型 -->
+    <div class="config-section" x-show="configTab==='model'">
+      <h3 class="config-sec-title">② 基准价模型</h3>
       <div class="form-grid">
         <label class="full">报价模型
           <select x-model="s.pricingModel.type" @change="onPricingModelChange()">
@@ -117,10 +138,11 @@
           </div>
         </template>
       </div>
-    </details>
+    </div>
 
-    <details open>
-      <summary>③ 得分规则</summary>
+    <!-- ③ 得分规则 -->
+    <div class="config-section" x-show="configTab==='score'">
+      <h3 class="config-sec-title">③ 得分规则</h3>
       <div class="form-grid">
         <label>商务标满分 S_max<input x-model.number="s.scoring.S_max" type="number" step="0.01" /></label>
         <label>得分模式
@@ -166,10 +188,11 @@
         <label>保留小数位<input x-model.number="s.scoring.roundDecimals" type="number" step="1" /></label>
         <label>得分下限<input x-model.number="s.scoring.floorScore" type="number" step="0.01" /></label>
       </div>
-    </details>
+    </div>
 
-    <details open>
-      <summary>④ 废标规则</summary>
+    <!-- ④ 废标规则 -->
+    <div class="config-section" x-show="configTab==='invalid'">
+      <h3 class="config-sec-title">④ 废标规则</h3>
       <div class="form-grid">
         <label class="checkbox"><input type="checkbox" x-model="s.invalidRules.overCmaxInvalid" /> 超过限价视为无效标</label>
         <label>低于成本处理
@@ -182,10 +205,11 @@
         <label>随机废标概率 p_reject (%)<input x-model.number="s.invalidRules.p_reject" type="number" step="0.1" /></label>
         <label>最少有效投标人数<input x-model.number="s.invalidRules.minValidBidders" type="number" step="1" /></label>
       </div>
-    </details>
+    </div>
 
-    <details open>
-      <summary>⑤ 伙伴投标人 <span class="count-badge" x-text="s.partners.length"></span></summary>
+    <!-- ⑤ 伙伴投标人 -->
+    <div class="config-section" x-show="configTab==='partner'">
+      <h3 class="config-sec-title">⑤ 伙伴投标人 <span class="count-badge" x-text="s.partners.length"></span></h3>
       <div class="partners-list">
         <template x-for="(p, i) in s.partners" :key="p.id">
           <div class="partner-card" :class="{ disabled: !p.enabled }">
@@ -229,10 +253,11 @@
         </template>
         <button class="btn btn-sm" @click="addPartner()">+ 添加伙伴</button>
       </div>
-    </details>
+    </div>
 
-    <details open>
-      <summary>⑥ 随机对手</summary>
+    <!-- ⑥ 随机对手 -->
+    <div class="config-section" x-show="configTab==='opponent'">
+      <h3 class="config-sec-title">⑥ 随机对手</h3>
       <div class="form-grid">
         <label>随机对手数量<input x-model.number="s.opponents.count" type="number" step="1" /></label>
         <div class="full">
@@ -262,10 +287,11 @@
           <textarea x-model="s.opponents.csv" rows="3" placeholder="项目编号,投标单位,报价,限价,报价率&#10;ZB-2023-001,单位A,9650000,10000000,0.965"></textarea>
         </label>
       </div>
-    </details>
+    </div>
 
-    <details open>
-      <summary>⑦ 我方策略</summary>
+    <!-- ⑦ 我方策略 -->
+    <div class="config-section" x-show="configTab==='strategy'">
+      <h3 class="config-sec-title">⑦ 我方策略</h3>
       <div class="form-grid">
         <label class="full">候选价模式
           <select x-model="s.strategy.candidateMode">
@@ -295,20 +321,22 @@
           <span x-text="candidates.length ? (candidates[0].toFixed(2) + ' ~ ' + candidates[candidates.length-1].toFixed(2)) : '—'"></span>
         </div>
       </div>
-    </details>
+    </div>
 
-    <details open>
-      <summary>⑧ 模拟参数</summary>
+    <!-- ⑧ 模拟参数 -->
+    <div class="config-section" x-show="configTab==='sim'">
+      <h3 class="config-sec-title">⑧ 模拟参数</h3>
       <div class="form-grid">
         <label>蒙特卡洛迭代次数<input x-model.number="s.simulation.iterations" type="number" step="100" /></label>
         <label>随机种子<input x-model.number="s.simulation.seed" type="number" step="1" /></label>
         <label class="checkbox"><input type="checkbox" x-model="s.simulation.useWorker" /> 启用 Worker（并行加速）</label>
         <label>进度回报间隔<input x-model.number="s.simulation.progressEvery" type="number" step="100" /></label>
       </div>
-    </details>
+    </div>
 
-    <details>
-      <summary>⑨ 场景矩阵 <span class="count-badge" x-text="s.scenarios.length"></span></summary>
+    <!-- ⑨ 场景矩阵 -->
+    <div class="config-section" x-show="configTab==='scenario'">
+      <h3 class="config-sec-title">⑨ 场景矩阵 <span class="count-badge" x-text="s.scenarios.length"></span></h3>
       <div class="scenarios-list">
         <template x-for="(sc, i) in s.scenarios" :key="sc.id">
           <div class="scenario-card">
@@ -338,30 +366,43 @@
         </template>
         <button class="btn btn-sm" @click="addScenario()">+ 添加场景</button>
       </div>
-    </details>
+    </div>
+
+    </div><!-- /config-body -->
   </aside>
 
   <!-- F2/F3 右侧结果面板 -->
   <section class="results-panel">
 
-    <div class="action-bar">
-      <button class="btn btn-primary" @click="runSinglePoint()" :disabled="running">单点测算</button>
-      <button class="btn btn-primary" @click="runBatch()" :disabled="running">批量扫描</button>
-      <button class="btn btn-primary" @click="runScenarios()" :disabled="running || s.scenarios.filter(x=>x.enabled).length===0">场景对比</button>
-      <button class="btn btn-warn" @click="abortRun()" x-show="running" :disabled="!running">中止</button>
-      <span class="separator"></span>
-      <button class="btn btn-sm" @click="exportCSV()" :disabled="!batchStats">导出CSV</button>
-      <button class="btn btn-sm" @click="exportPNG()" :disabled="!batchStats">导出图表PNG</button>
-      <button class="btn btn-sm" @click="exportMarkdown()" :disabled="!batchStats">导出Markdown</button>
-      <button class="btn btn-sm" @click="printReport()" :disabled="!batchStats">打印报告</button>
+    <!-- 冻结头部：操作按钮 + 进度条，滚动时不随内容移动 -->
+    <div class="results-head">
+      <div class="action-bar">
+        <button class="btn btn-primary" @click="runSinglePoint()" :disabled="running">单点测算</button>
+        <button class="btn btn-primary" @click="runBatch()" :disabled="running">批量扫描</button>
+        <button class="btn btn-primary" @click="runScenarios()" :disabled="running || s.scenarios.filter(x=>x.enabled).length===0">场景对比</button>
+        <button class="btn btn-warn" @click="abortRun()" x-show="running" :disabled="!running">中止</button>
+        <span class="separator"></span>
+        <button class="btn btn-sm" @click="exportCSV()" :disabled="!batchStats">导出CSV</button>
+        <button class="btn btn-sm" @click="exportPNG()" :disabled="!batchStats">导出图表PNG</button>
+        <button class="btn btn-sm" @click="exportMarkdown()" :disabled="!batchStats">导出Markdown</button>
+        <button class="btn btn-sm" @click="printReport()" :disabled="!batchStats">打印报告</button>
+        <span class="separator"></span>
+        <span class="unit-label">金额显示</span>
+        <div class="unit-toggle">
+          <button class="unit-btn" :class="{active: amountUnit==='yuan'}" @click="setAmountUnit('yuan')">元</button>
+          <button class="unit-btn" :class="{active: amountUnit==='wan'}" @click="setAmountUnit('wan')">万元</button>
+        </div>
+      </div>
+
+      <div class="progress-wrap" x-show="running || progress.done > 0">
+        <div class="progress-bar">
+          <div class="progress-fill" :style="'width:' + progressPct + '%'"></div>
+        </div>
+        <span class="progress-text" x-text="progressText"></span>
+      </div>
     </div>
 
-    <div class="progress-wrap" x-show="running || progress.done > 0">
-      <div class="progress-bar">
-        <div class="progress-fill" :style="'width:' + progressPct + '%'"></div>
-      </div>
-      <span class="progress-text" x-text="progressText"></span>
-    </div>
+    <div class="results-body">
 
     <!-- 校验与警告 -->
     <div class="validation-box" x-show="validation.errors.length || validation.warnings.length">
@@ -388,7 +429,7 @@
       <summary>F2-1 单点测算结果</summary>
       <div class="result-body" x-show="singleResult">
         <div class="kpis">
-          <div class="kpi"><span class="kpi-label">基准价 B</span><span class="kpi-val" x-text="singleResult ? fmt(singleResult.basePrice) : '-'"></span></div>
+          <div class="kpi"><span class="kpi-label">基准价 B</span><span class="kpi-val" x-text="singleResult ? fmtMoney(singleResult.basePrice) : '-'"></span></div>
           <div class="kpi"><span class="kpi-label">我方排名</span><span class="kpi-val" x-text="singleResult ? singleResult.myRank : '-'"></span></div>
           <div class="kpi"><span class="kpi-label">有效家数</span><span class="kpi-val" x-text="singleResult ? singleResult.validCount : '-'"></span></div>
           <div class="kpi"><span class="kpi-label">低置信</span><span class="kpi-val" x-text="singleResult ? (singleResult.lowConfidence ? '是' : '否') : '-'"></span></div>
@@ -453,6 +494,7 @@
       <p class="legal-ref">依据：《中华人民共和国招标投标法》第三十二条、第五十三条；《实施条例》第三十九条至第四十一条。本系统不提供、不建议任何与其他投标人协调报价的方案。</p>
     </div>
 
+    </div><!-- /results-body -->
   </section>
 </main>
 
@@ -472,7 +514,7 @@
           <template x-for="row in schemeList" :key="row.id">
             <tr>
               <td x-text="(row.pinned ? '★ ' : '') + row.name"></td>
-              <td x-text="fmt(row.summary.C_max)"></td>
+              <td x-text="fmtMoney(row.summary.C_max)"></td>
               <td x-text="row.summary.model"></td>
               <td x-text="row.summary.partners"></td>
               <td x-text="row.summary.opponents"></td>
