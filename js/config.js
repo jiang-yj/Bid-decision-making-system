@@ -216,6 +216,14 @@
       if (s.strategy.range.discountMin >= s.strategy.range.discountMax)
         errors.push('折扣率下限应小于上限');
       if (s.strategy.range.step <= 0) errors.push('步长必须 > 0');
+    } else if (s.strategy.candidateMode === 'list') {
+      var list = s.strategy.list || [];
+      if (list.length === 0) errors.push('候选价列表不能为空');
+      for (var li = 0; li < list.length; li++) {
+        var lv = list[li];
+        if (lv <= 0) errors.push('候选价列表第 ' + (li + 1) + ' 项必须 > 0');
+        else if (lv > 2 && lv > s.project.C_max) errors.push('候选价列表第 ' + (li + 1) + ' 项（' + lv + ' 元）超过最高限价，必然废标');
+      }
     }
 
     return { ok: errors.length === 0, errors: errors, warnings: warnings };
@@ -268,7 +276,11 @@
     var result = [];
 
     if (st.candidateMode === 'list') {
-      result = (st.list || []).map(function (r) { return r * C; });
+      // 智能识别：值 ≤ 2 视为折扣率（×C_max，兼容旧方案），> 2 视为绝对金额（元）
+      result = (st.list || []).map(function (r) {
+        var v = r <= 2 ? r * C : r;
+        return Math.round(v * 100) / 100;
+      });
     } else {
       var r = st.range;
       var lo = r.discountMin / 100;

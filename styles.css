@@ -276,6 +276,13 @@ details > summary:hover { background: var(--surface-3); }
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 8px 10px; background: var(--surface-3); border-radius: var(--radius); margin-bottom: 10px;
 }
+.single-bid-group { display: flex; align-items: center; gap: 6px; }
+.custom-bid-input {
+  padding: 6px 8px; font-size: 0.82rem; width: 200px; flex: 0 0 200px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--input-bg); color: var(--text);
+  outline: none; transition: border-color 0.12s;
+}
+.custom-bid-input:focus { border-color: var(--primary); }
 .separator { flex: 0 0 1px; width: 1px; height: 24px; background: var(--border); margin: 0 4px; }
 
 /* 金额单位切换 */

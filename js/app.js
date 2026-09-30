@@ -40,6 +40,7 @@
       distParamText: {},       // 对手分布参数文本（按索引）
       strategyListText: '',
       formulaStatus: '',
+      customBid: '',           // 单点测算自定义报价（留空则取中间候选价）
 
       // 运行状态
       running: false,
@@ -138,6 +139,7 @@
         this.scenarioStats = null;
         this.conclusions = null;
         this.conclusionsHtml = '';
+        this.customBid = '';
         this.syncParamTexts();
         this.showToast('已新建方案，记得保存');
       },
@@ -384,8 +386,19 @@
         var s = this.s;
         var cands = this.candidates;
         if (cands.length === 0) { this.showToast('无候选报价，请检查策略'); return; }
-        // 取中间候选价做单点测算
-        var myBid = cands[Math.floor(cands.length / 2)];
+        // 优先使用用户输入的自定义报价，留空则取中间候选价
+        var myBid;
+        var customTxt = (this.customBid || '').trim();
+        if (customTxt) {
+          var customNum = parseFloat(customTxt.replace(/[,\s]/g, ''));
+          if (isNaN(customNum) || customNum <= 0) {
+            this.showToast('自定义报价无效，请输入大于 0 的金额');
+            return;
+          }
+          myBid = customNum;
+        } else {
+          myBid = cands[Math.floor(cands.length / 2)];
+        }
         var partners = (s.partners || []).filter(function (p) { return p.enabled; });
         var rngFunc = BDSS.rng.mulberry32(s.simulation.seed);
         var costLine = s.project.costWarningLine || 0;

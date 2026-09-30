@@ -312,8 +312,8 @@
           </div>
         </template>
         <template x-if="s.strategy.candidateMode === 'list'">
-          <label class="full">候选价（逗号分隔的绝对值）
-            <textarea x-model="strategyListText" rows="2" @input="parseStrategyList()" placeholder="9500000,9600000,9700000"></textarea>
+          <label class="full">候选价（逗号分隔，支持折扣率或金额：0.95 = 限价的95%，也可直接填金额如 9500000）
+            <textarea x-model="strategyListText" rows="2" @input="parseStrategyList()" placeholder="0.95,0.96,0.97 或 9500000,9600000,9700000"></textarea>
           </label>
         </template>
         <div class="full candidate-preview">
@@ -377,7 +377,10 @@
     <!-- 冻结头部：操作按钮 + 进度条，滚动时不随内容移动 -->
     <div class="results-head">
       <div class="action-bar">
-        <button class="btn btn-primary" @click="runSinglePoint()" :disabled="running">单点测算</button>
+        <div class="single-bid-group">
+          <button class="btn btn-primary" @click="runSinglePoint()" :disabled="running">单点测算</button>
+          <input type="text" class="custom-bid-input" x-model="customBid" :placeholder="'自定义报价（留空取中间候选价）'" @keyup.enter="runSinglePoint()" />
+        </div>
         <button class="btn btn-primary" @click="runBatch()" :disabled="running">批量扫描</button>
         <button class="btn btn-primary" @click="runScenarios()" :disabled="running || s.scenarios.filter(x=>x.enabled).length===0">场景对比</button>
         <button class="btn btn-warn" @click="abortRun()" x-show="running" :disabled="!running">中止</button>
