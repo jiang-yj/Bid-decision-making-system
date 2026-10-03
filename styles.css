@@ -93,18 +93,21 @@ body {
 .compliance-banner {
   background: linear-gradient(90deg, var(--compliance-bg), var(--panel) 60%);
   border-bottom: 2px solid var(--warn);
-  padding: 8px 16px;
+  padding: 10px 16px;
   font-size: 0.85rem;
   color: var(--compliance-text);
+  position: relative;
 }
 .compliance-inner {
-  display: flex; align-items: center; gap: 10px; max-width: 1400px; margin: 0 auto;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  max-width: 1400px; margin: 0 auto; position: relative;
 }
-.compliance-icon { font-size: 1.1rem; flex-shrink: 0; }
-.compliance-text { flex: 1; }
+.compliance-icon { font-size: 1.1rem; flex-shrink: 0; position: absolute; left: 0; }
+.compliance-text { flex: 0 1 auto; text-align: center; max-width: 85%; line-height: 1.5; }
 .compliance-close {
   background: transparent; border: 1px solid var(--warn); color: var(--warn);
-  padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; flex-shrink: 0;
+  padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8rem;
+  flex-shrink: 0; position: absolute; right: 0;
 }
 .compliance-close:hover { background: var(--warn); color: #fff; }
 
@@ -222,6 +225,8 @@ body {
 }
 .checkbox { flex-direction: row; align-items: center; gap: 6px; }
 .checkbox input { width: auto; }
+/* 标签文本整体作为单个 flex 子项，防止动态 span 拆行导致输入框错位 */
+.form-grid label .lbl-text { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hint { font-size: 0.72rem; color: var(--text-muted); margin-left: 6px; }
 .sub-hint { font-size: 0.72rem; color: var(--text-muted); margin: 4px 0; }
 .model-desc { font-size: 0.78rem; color: var(--accent); font-style: italic; padding: 4px 6px; background: var(--accent-bg); border-radius: 4px; }
@@ -264,12 +269,63 @@ details > summary:hover { background: var(--surface-3); }
 }
 .mini-table th, .data-table th { background: var(--surface-3); font-weight: 600; }
 .mini-table input, .mini-table select {
-  width: 100%; min-width: 0; padding: 3px 5px; font-size: 0.78rem;
+  width: 100%; min-width: 0; padding: 5px 8px; font-size: 0.85rem;
   border: 1px solid var(--border); border-radius: 3px;
   background: var(--input-bg); color: var(--text);
 }
 .dist-params { font-family: monospace; font-size: 0.75rem; }
+
+/* 分布参数组 — 按类型显示固定字段+中文标签 */
+.dist-param-group {
+  display: block; width: 100%;
+}
+.dist-field {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; margin-bottom: 6px;
+}
+.dist-field:last-child { margin-bottom: 0; }
+.dist-label {
+  font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; min-width: 90px;
+}
+.dist-field input {
+  flex: 1 1 0; min-width: 0; padding: 5px 8px; font-size: 0.85rem;
+  border: 1px solid var(--border); border-radius: 3px;
+  background: var(--input-bg); color: var(--text); text-align: center;
+}
+.empirical-input {
+  width: 100%; min-width: 0; padding: 5px 8px; font-size: 0.85rem;
+  border: 1px solid var(--border); border-radius: 3px;
+  background: var(--input-bg); color: var(--text);
+}
+
+/* 对手分布表格列宽固定 */
+.dist-table { table-layout: fixed; }
+.dist-table .dist-field.empirical-field {
+  display: block;
+  margin-bottom: 2px;
+}
 .scenarios-list, .partners-list { min-width: 0; }
+
+/* 模型B 分段去极值 — flexbox 行布局（替代窄面板中的拥挤表格） */
+.seg-list { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
+.seg-row {
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 8px; background: var(--surface-2); border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.seg-field { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.seg-label { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; }
+.seg-field input {
+  width: 100%; padding: 5px 8px; font-size: 0.88rem; text-align: center;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: var(--input-bg); color: var(--text); min-width: 0;
+}
+.seg-del { flex-shrink: 0; padding: 5px 10px; margin-bottom: 1px; white-space: nowrap; }
+
+/* 模型B 固定数量模式标签垂直堆叠 */
+.config-section label.full {
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px;
+}
 
 /* ========== 结果区 ========== */
 .action-bar {
@@ -317,7 +373,8 @@ details > summary:hover { background: var(--surface-3); }
   display: flex; flex-direction: column; gap: 4px;
 }
 .kpi-label { font-size: 0.72rem; color: var(--text-muted); }
-.kpi-val { font-size: 1.3rem; font-weight: 700; color: var(--primary); }
+.kpi-val { font-size: 1.3rem; font-weight: 700; color: var(--primary); display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.kpi-sub { font-size: 0.78rem; font-weight: 400; color: var(--text-muted); }
 
 .chart-host { width: 100%; height: 320px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--chart-bg); }
 .table-host { margin-bottom: 12px; overflow-x: auto; }
@@ -331,6 +388,8 @@ details > summary:hover { background: var(--surface-3); }
 .table-host .sort-arrow.desc, .table-host .sort-arrow.asc { opacity: 1; color: var(--primary); }
 .table-host .sort-arrow.none { opacity: 0.3; }
 .table-host tr.best-row { background: var(--best-row); font-weight: 600; }
+/* 单点测算结果表：无效（废标）投标人整行标红 */
+.table-host tr.invalid-row td { color: var(--danger); }
 .table-host .fallback { padding: 20px; text-align: center; color: var(--text-muted); }
 
 /* 智能分析 */
@@ -416,6 +475,14 @@ details > summary:hover { background: var(--surface-3); }
   .report-compliance { break-inside: avoid; }
   .kpi-val { font-size: 1rem; }
 }
+
+/* 单点测算结果表【是否有效】下拉框 */
+.cell-valid-select {
+  font-size: 0.8rem; padding: 3px 6px; border: 1px solid var(--border);
+  border-radius: 4px; background: var(--input-bg); color: var(--text);
+  cursor: pointer; min-width: 70px;
+}
+.cell-valid-select:focus { outline: none; border-color: var(--primary); }
 
 /* 滚动条美化 */
 ::-webkit-scrollbar { width: 8px; height: 8px; }

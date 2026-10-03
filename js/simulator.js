@@ -91,6 +91,14 @@
       if (d.type === 'uniform') {
         if (d.params.min <= 1) d.params = { min: d.params.min * C_max, max: d.params.max * C_max };
       } else if (d.type === 'normal') {
+        // 支持两种参数形式：mean/std 或 min/max
+        if (d.params.mean === undefined && d.params.min !== undefined) {
+          var nMin = d.params.min;
+          var nMax = d.params.max !== undefined ? d.params.max : d.params.min;
+          d.params.mean = (nMin + nMax) / 2;
+          d.params.std = nMax > nMin ? (nMax - nMin) / 6 : 0;
+        }
+        if (d.params.std === undefined) d.params.std = 0;
         if (d.params.mean <= 1) d.params = { mean: d.params.mean * C_max, std: d.params.std * C_max };
       } else if (d.type === 'triangular') {
         if (d.params.a <= 1) d.params = { a: d.params.a * C_max, b: d.params.b * C_max, c: d.params.c * C_max };

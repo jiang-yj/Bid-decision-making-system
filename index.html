@@ -13,7 +13,6 @@
 <!-- F0 合规提示条：不可永久关闭，仅本次会话可折叠 -->
 <div class="compliance-banner" x-show="!ui.complianceDismissed" x-transition>
   <div class="compliance-inner">
-    <span class="compliance-icon">⚖</span>
     <span class="compliance-text" x-text="complianceNotice"></span>
     <button class="compliance-close" @click="ui.complianceDismissed = true" title="本次会话折叠（重启后再次显示）">本次折叠</button>
   </div>
@@ -26,10 +25,10 @@
   <div class="topbar-center">
     <label class="scheme-select">
       <span>当前方案：</span>
-      <select x-model="currentSchemeId" @change="loadScheme(currentSchemeId)">
-        <option value="">— 选择方案 —</option>
+      <select x-model="currentSchemeId" @change="loadScheme($event.target.value)">
+        <option value="" disabled>— 选择方案 —</option>
         <template x-for="s in schemeList" :key="s.id">
-          <option :value="s.id" x-text="(s.pinned ? '★ ' : '') + s.name"></option>
+          <option :value="s.id" x-text="(s.pinned ? '★ ' : '') + s.name" :selected="s.id === currentSchemeId"></option>
         </template>
       </select>
     </label>
@@ -67,13 +66,13 @@
     <div class="config-body">
 
     <!-- ① 项目信息 -->
-    <div class="config-section" x-show="configTab==='info'">
+    <div class="config-section" :style="{ display: configTab==='info' ? '' : 'none' }">
       <h3 class="config-sec-title">① 项目信息</h3>
       <div class="form-grid">
         <label>项目名称<input x-model="s.project.name" type="text" /></label>
         <label>项目编号<input x-model="s.project.code" type="text" /></label>
         <label>标段<input x-model="s.project.section" type="text" /></label>
-        <label>最高投标限价 C_max<input x-model.number="s.project.C_max" type="number" step="0.01" /></label>
+        <label>最高投标限价 C_max<input x-model.number="s.project.C_max" type="number" step="0.01" @change="refreshPartnerDiscTexts()" /></label>
         <label>成本警戒线<input x-model.number="s.project.costWarningLine" type="number" step="0.01" /></label>
         <label>币种
           <select x-model="s.project.currency">
@@ -86,7 +85,7 @@
     </div>
 
     <!-- ② 基准价模型 -->
-    <div class="config-section" x-show="configTab==='model'">
+    <div class="config-section" :style="{ display: configTab==='model' ? '' : 'none' }">
       <h3 class="config-sec-title">② 基准价模型</h3>
       <div class="form-grid">
         <label class="full">报价模型
@@ -98,11 +97,48 @@
         </label>
         <div class="full model-desc" x-text="modelReadable"></div>
 
-        <template x-if="s.pricingModel.type === 'C'">
-          <label class="full">下浮系数 K<input x-model.number="s.pricingModel.params.K" type="number" step="0.001" /></label>
-        </template>
+        <div class="full" :style="{ display: modelType === 'B' ? '' : 'none' }">
+          <label class="full">去极值模式
+            <select x-model="s.pricingModel.params.trimMode" @change="onPricingModelChange()">
+              <option value="fixed">固定数量</option>
+              <option value="piecewise">按家数分段</option>
+            </select>
+          </label>
+          <div class="full" :style="{ display: bMode === 'fixed' ? '' : 'none' }">
+            <label class="full">去掉最低报价数（个）<input x-model.number="s.pricingModel.params.trimLow" type="number" min="0" step="1" /></label>
+            <label class="full">去掉最高报价数（个）<input x-model.number="s.pricingModel.params.trimHigh" type="number" min="0" step="1" /></label>
+          </div>
+          <div class="full" :style="{ display: bMode === 'piecewise' ? '' : 'none' }">
+            <div class="sub-hint">按有效投标人家数分段（家数 ≥ 下限的首条规则生效，从高到低匹配）</div>
+            <div class="seg-list">
+              <template x-for="(seg, i) in (s.pricingModel.params.segments || [])" :key="i">
+                <div class="seg-row">
+                  <div class="seg-field">
+                    <span class="seg-label">家数≥</span>
+                    <input x-model.number="seg.minCount" type="number" min="1" step="1" />
+                  </div>
+                  <div class="seg-field">
+                    <span class="seg-label">去最低</span>
+                    <input x-model.number="seg.trimLow" type="number" min="0" step="1" />
+                  </div>
+                  <div class="seg-field">
+                    <span class="seg-label">去最高</span>
+                    <input x-model.number="seg.trimHigh" type="number" min="0" step="1" />
+                  </div>
+                  <button class="btn btn-xs seg-del" @click="removeBSegment(i)">删</button>
+                </div>
+              </template>
+            </div>
+            <button class="btn btn-xs" @click="addBSegment()">+ 添加分段</button>
+            <div class="sub-hint">示例：≥6家 去1高1低；≥1家 去0个 → 即 6 家以上去极值，5 家及以下全量平均。</div>
+          </div>
+        </div>
 
-        <template x-if="s.pricingModel.type === 'D'">
+        <div class="full" :style="{ display: modelType === 'C' ? '' : 'none' }">
+          <label class="full">下浮系数 K<input x-model.number="s.pricingModel.params.K" type="number" step="0.001" /></label>
+        </div>
+
+        <div class="full" :style="{ display: modelType === 'D' ? '' : 'none' }">
           <div class="full">
             <div class="sub-hint">复合权重组件（权重自动归一）</div>
             <table class="mini-table">
@@ -127,24 +163,24 @@
             </table>
             <button class="btn btn-xs" @click="addComposite()">+ 添加组件</button>
           </div>
-        </template>
+        </div>
 
-        <template x-if="s.pricingModel.type === 'custom'">
+        <div class="full" :style="{ display: modelType === 'custom' ? '' : 'none' }">
           <div class="full">
             <label>自定义公式<input x-model="s.pricingModel.params.formula" type="text" placeholder="如：mean(Q)*0.98" /></label>
             <div class="sub-hint">可用变量：Q, n, C_max, mean, min, max, median, K；函数：abs/min/max/round/floor/ceil/sqrt/log/exp/pow</div>
             <button class="btn btn-xs" @click="validateFormula()">校验公式</button>
             <span class="hint" x-text="formulaStatus"></span>
           </div>
-        </template>
+        </div>
       </div>
     </div>
 
     <!-- ③ 得分规则 -->
-    <div class="config-section" x-show="configTab==='score'">
+    <div class="config-section" :style="{ display: configTab==='score' ? '' : 'none' }">
       <h3 class="config-sec-title">③ 得分规则</h3>
       <div class="form-grid">
-        <label>商务标满分 S_max<input x-model.number="s.scoring.S_max" type="number" step="0.01" /></label>
+        <label>报价满分 S_max<input x-model.number="s.scoring.S_max" type="number" step="0.01" /></label>
         <label>得分模式
           <select x-model="s.scoring.mode">
             <template x-for="m in defaults.scoringModes" :key="m.value">
@@ -191,7 +227,7 @@
     </div>
 
     <!-- ④ 废标规则 -->
-    <div class="config-section" x-show="configTab==='invalid'">
+    <div class="config-section" :style="{ display: configTab==='invalid' ? '' : 'none' }">
       <h3 class="config-sec-title">④ 废标规则</h3>
       <div class="form-grid">
         <label class="checkbox"><input type="checkbox" x-model="s.invalidRules.overCmaxInvalid" /> 超过限价视为无效标</label>
@@ -208,7 +244,7 @@
     </div>
 
     <!-- ⑤ 伙伴投标人 -->
-    <div class="config-section" x-show="configTab==='partner'">
+    <div class="config-section" :style="{ display: configTab==='partner' ? '' : 'none' }">
       <h3 class="config-sec-title">⑤ 伙伴投标人 <span class="count-badge" x-text="s.partners.length"></span></h3>
       <div class="partners-list">
         <template x-for="(p, i) in s.partners" :key="p.id">
@@ -216,7 +252,7 @@
             <div class="partner-head">
               <label class="checkbox"><input type="checkbox" x-model="p.enabled" /> 启用</label>
               <input class="partner-name" x-model="p.name" type="text" placeholder="伙伴名称" />
-              <button class="btn btn-xs" @click="s.partners.splice(i,1)">删</button>
+              <button class="btn btn-xs" @click="removePartner(i)">删</button>
             </div>
             <div class="form-grid">
               <label class="full">设定方式
@@ -227,7 +263,14 @@
                 </select>
               </label>
               <template x-if="p.method === 'fixed'">
-                <label class="full">固定报价（绝对值）<input x-model.number="p.fixedQuote" type="number" step="0.01" /></label>
+                <div class="full form-grid">
+                  <label><span class="lbl-text">固定报价（<span x-text="amountUnit==='wan' ? '万元' : '元'"></span>）</span>
+                    <input x-model="partnerQuoteText[i]" type="text" inputmode="decimal" @input="onPartnerQuoteInput(i)" />
+                  </label>
+                  <label><span class="lbl-text">折扣（相对限价）</span>
+                    <input x-model="partnerDiscText[i]" type="text" inputmode="decimal" @input="onPartnerDiscInput(i)" placeholder="如 0.965 或 96.5" />
+                  </label>
+                </div>
               </template>
               <template x-if="p.method === 'narrow'">
                 <div class="full form-grid">
@@ -256,25 +299,64 @@
     </div>
 
     <!-- ⑥ 随机对手 -->
-    <div class="config-section" x-show="configTab==='opponent'">
+    <div class="config-section" :style="{ display: configTab==='opponent' ? '' : 'none' }">
       <h3 class="config-sec-title">⑥ 随机对手</h3>
       <div class="form-grid">
         <label>随机对手数量<input x-model.number="s.opponents.count" type="number" step="1" /></label>
+        <label class="full">对手名称（逗号分隔，对应分布顺序）
+          <input x-model="opponentNamesText" @input="parseOpponentNames()" placeholder="对手1,对手2,对手3..." />
+        </label>
         <div class="full">
           <div class="sub-hint">分布列表（按顺序循环分配给每个对手；参数 ≤1 视为限价百分比，自动转绝对值）</div>
-          <table class="mini-table">
+          <table class="mini-table dist-table">
+            <colgroup>
+              <col style="width: 60px;">
+              <col>
+              <col style="width: 40px;">
+              <col style="width: 36px;">
+            </colgroup>
             <thead><tr><th>类型</th><th>参数</th><th>组</th><th></th></tr></thead>
             <tbody>
               <template x-for="(d, i) in s.opponents.distributions" :key="d.id">
                 <tr>
                   <td>
-                    <select x-model="d.type">
+                    <select x-model="d.type" @change="onDistTypeChange(d)">
                       <template x-for="t in defaults.opponentDistTypes" :key="t.value">
                         <option :value="t.value" x-text="t.label"></option>
                       </template>
                     </select>
                   </td>
-                  <td><input class="dist-params" x-model="distParamText[i]" type="text" @input="parseDistParams(i)" placeholder="min=0.9,max=0.98" /></td>
+                  <td>
+                    <template x-if="d.type==='uniform'">
+                      <div class="dist-param-group">
+                        <div class="dist-field"><span class="dist-label">min（下限）</span><input x-model.number="d.params.min" type="number" step="0.01" min="0" max="1" /></div>
+                        <div class="dist-field"><span class="dist-label">max（上限）</span><input x-model.number="d.params.max" type="number" step="0.01" min="0" max="1" /></div>
+                      </div>
+                    </template>
+                    <template x-if="d.type==='normal'">
+                      <div class="dist-param-group">
+                        <div class="dist-field"><span class="dist-label">mean（均值）</span><input x-model.number="d.params.mean" type="number" step="0.01" min="0" max="1" /></div>
+                        <div class="dist-field"><span class="dist-label">std（标准差）</span><input x-model.number="d.params.std" type="number" step="0.01" min="0" max="1" /></div>
+                      </div>
+                    </template>
+                    <template x-if="d.type==='triangular'">
+                      <div class="dist-param-group">
+                        <div class="dist-field"><span class="dist-label">a（最小值）</span><input x-model.number="d.params.a" type="number" step="0.01" min="0" max="1" /></div>
+                        <div class="dist-field"><span class="dist-label">b（最可能值）</span><input x-model.number="d.params.b" type="number" step="0.01" min="0" max="1" /></div>
+                        <div class="dist-field"><span class="dist-label">c（最大值）</span><input x-model.number="d.params.c" type="number" step="0.01" min="0" max="1" /></div>
+                      </div>
+                    </template>
+                    <template x-if="d.type==='empirical'">
+                      <div class="dist-param-group">
+                        <div class="dist-field empirical-field">
+                          <span class="dist-label">samples（样本列表，逗号分隔）</span>
+                        </div>
+                        <div class="dist-field">
+                          <input class="empirical-input" x-model="d.params._samplesText" @input="parseEmpiricalSamples(i)" placeholder="0.92,0.95,0.97" />
+                        </div>
+                      </div>
+                    </template>
+                  </td>
                   <td><input x-model="d.group" type="text" size="3" /></td>
                   <td><button class="btn btn-xs" @click="s.opponents.distributions.splice(i,1)">删</button></td>
                 </tr>
@@ -290,7 +372,7 @@
     </div>
 
     <!-- ⑦ 我方策略 -->
-    <div class="config-section" x-show="configTab==='strategy'">
+    <div class="config-section" :style="{ display: configTab==='strategy' ? '' : 'none' }">
       <h3 class="config-sec-title">⑦ 我方策略</h3>
       <div class="form-grid">
         <label class="full">候选价模式
@@ -324,7 +406,7 @@
     </div>
 
     <!-- ⑧ 模拟参数 -->
-    <div class="config-section" x-show="configTab==='sim'">
+    <div class="config-section" :style="{ display: configTab==='sim' ? '' : 'none' }">
       <h3 class="config-sec-title">⑧ 模拟参数</h3>
       <div class="form-grid">
         <label>蒙特卡洛迭代次数<input x-model.number="s.simulation.iterations" type="number" step="100" /></label>
@@ -335,7 +417,7 @@
     </div>
 
     <!-- ⑨ 场景矩阵 -->
-    <div class="config-section" x-show="configTab==='scenario'">
+    <div class="config-section" :style="{ display: configTab==='scenario' ? '' : 'none' }">
       <h3 class="config-sec-title">⑨ 场景矩阵 <span class="count-badge" x-text="s.scenarios.length"></span></h3>
       <div class="scenarios-list">
         <template x-for="(sc, i) in s.scenarios" :key="sc.id">
@@ -379,11 +461,11 @@
       <div class="action-bar">
         <div class="single-bid-group">
           <button class="btn btn-primary" @click="runSinglePoint()" :disabled="running">单点测算</button>
-          <input type="text" class="custom-bid-input" x-model="customBid" :placeholder="'自定义报价（留空取中间候选价）'" @keyup.enter="runSinglePoint()" />
+          <input type="text" class="custom-bid-input" x-model="customBid" :placeholder="'自定义报价（' + (amountUnit==='wan' ? '万元' : '元') + '，留空取中间候选价）'" @keyup.enter="runSinglePoint()" />
         </div>
         <button class="btn btn-primary" @click="runBatch()" :disabled="running">批量扫描</button>
         <button class="btn btn-primary" @click="runScenarios()" :disabled="running || s.scenarios.filter(x=>x.enabled).length===0">场景对比</button>
-        <button class="btn btn-warn" @click="abortRun()" x-show="running" :disabled="!running">中止</button>
+        <button class="btn btn-warn" @click="abortRun()" :style="{ display: running ? '' : 'none' }" :disabled="!running">中止</button>
         <span class="separator"></span>
         <button class="btn btn-sm" @click="exportCSV()" :disabled="!batchStats">导出CSV</button>
         <button class="btn btn-sm" @click="exportPNG()" :disabled="!batchStats">导出图表PNG</button>
@@ -397,7 +479,7 @@
         </div>
       </div>
 
-      <div class="progress-wrap" x-show="running || progress.done > 0">
+      <div class="progress-wrap" :style="{ display: (running || progress.done > 0) ? '' : 'none' }">
         <div class="progress-bar">
           <div class="progress-fill" :style="'width:' + progressPct + '%'"></div>
         </div>
@@ -408,7 +490,7 @@
     <div class="results-body">
 
     <!-- 校验与警告 -->
-    <div class="validation-box" x-show="validation.errors.length || validation.warnings.length">
+    <div class="validation-box" :style="{ display: (validation.errors.length || validation.warnings.length) ? '' : 'none' }">
       <template x-if="validation.errors.length">
         <div class="val-errors">
           <strong>校验错误：</strong>
@@ -428,11 +510,11 @@
     </div>
 
     <!-- F2-1 单点测算结果 -->
-    <details class="result-block" open x-show="singleResult">
+    <details class="result-block" open :style="{ display: singleResult ? '' : 'none' }">
       <summary>F2-1 单点测算结果</summary>
-      <div class="result-body" x-show="singleResult">
+      <div class="result-body" :style="{ display: singleResult ? '' : 'none' }">
         <div class="kpis">
-          <div class="kpi"><span class="kpi-label">基准价 B</span><span class="kpi-val" x-text="singleResult ? fmtMoney(singleResult.basePrice) : '-'"></span></div>
+          <div class="kpi"><span class="kpi-label">基准价 B</span><span class="kpi-val"><span x-text="singleResult ? fmtMoney(singleResult.basePrice) : '-'"></span><span class="kpi-sub" :style="{ display: (singleResult && singleResult.C_max) ? '' : 'none' }" x-text="singleResult ? '折扣 ' + (singleResult.basePrice / singleResult.C_max).toFixed(5) : ''"></span></span></div>
           <div class="kpi"><span class="kpi-label">我方排名</span><span class="kpi-val" x-text="singleResult ? singleResult.myRank : '-'"></span></div>
           <div class="kpi"><span class="kpi-label">有效家数</span><span class="kpi-val" x-text="singleResult ? singleResult.validCount : '-'"></span></div>
           <div class="kpi"><span class="kpi-label">低置信</span><span class="kpi-val" x-text="singleResult ? (singleResult.lowConfidence ? '是' : '否') : '-'"></span></div>
@@ -442,9 +524,9 @@
     </details>
 
     <!-- F2-2 批量扫描结果 -->
-    <details class="result-block" open x-show="batchStats">
+    <details class="result-block" open :style="{ display: batchStats ? '' : 'none' }">
       <summary>F2-2 批量扫描结果（<span x-text="batchStats ? batchStats.length : 0"></span> 个候选价）</summary>
-      <div class="result-body" x-show="batchStats">
+      <div class="result-body" :style="{ display: batchStats ? '' : 'none' }">
         <div id="chartWinProb" class="chart-host"></div>
         <div id="chartScoreDist" class="chart-host"></div>
         <div id="chartRankDist" class="chart-host"></div>
@@ -453,33 +535,33 @@
     </details>
 
     <!-- F2-3 场景对比 -->
-    <details class="result-block" x-show="scenarioStats && scenarioStats.length">
+    <details class="result-block" :style="{ display: (scenarioStats && scenarioStats.length) ? '' : 'none' }">
       <summary>F2-3 场景对比</summary>
-      <div class="result-body" x-show="scenarioStats && scenarioStats.length">
+      <div class="result-body" :style="{ display: (scenarioStats && scenarioStats.length) ? '' : 'none' }">
         <div id="chartScenario" class="chart-host"></div>
         <div id="scenarioTable" class="table-host"></div>
       </div>
     </details>
 
     <!-- F3 智能分析 -->
-    <details class="result-block" open x-show="conclusions">
+    <details class="result-block" open :style="{ display: conclusions ? '' : 'none' }">
       <summary>F3 智能分析结论</summary>
-      <div class="result-body markdown-host" x-show="conclusions">
+      <div class="result-body markdown-host" :style="{ display: conclusions ? '' : 'none' }">
         <div class="conclusion-grid">
           <div class="concl-card">
             <h4>建议报价</h4>
             <div class="markdown-body" x-html="conclusionsHtml"></div>
           </div>
-          <div class="concl-card" x-show="conclusions && conclusions.partnerEcho && conclusions.partnerEcho.hasPartners">
+          <div class="concl-card" :style="{ display: (conclusions && conclusions.partnerEcho && conclusions.partnerEcho.hasPartners) ? '' : 'none' }">
             <h4>伙伴表回显</h4>
             <div id="partnerEchoTable" class="table-host"></div>
           </div>
         </div>
-        <div class="concl-card full" x-show="conclusions && conclusions.robustness">
+        <div class="concl-card full" :style="{ display: (conclusions && conclusions.robustness) ? '' : 'none' }">
           <h4>稳健性分析</h4>
           <div class="markdown-body" x-text="conclusions && conclusions.robustness ? conclusions.robustness.text : ''"></div>
         </div>
-        <div class="concl-card full" x-show="conclusions && conclusions.risks && conclusions.risks.items && conclusions.risks.items.length">
+        <div class="concl-card full" :style="{ display: (conclusions && conclusions.risks && conclusions.risks.items && conclusions.risks.items.length) ? '' : 'none' }">
           <h4>风险提示</h4>
           <ul class="risk-list">
             <template x-for="r in (conclusions && conclusions.risks ? conclusions.risks.items : [])" :key="r">
@@ -491,7 +573,7 @@
     </details>
 
     <!-- 报告底部合规回显 -->
-    <div class="report-compliance" x-show="batchStats || singleResult">
+    <div class="report-compliance" :style="{ display: (batchStats || singleResult) ? '' : 'none' }">
       <h5>合规声明</h5>
       <p x-text="complianceNotice"></p>
       <p class="legal-ref">依据：《中华人民共和国招标投标法》第三十二条、第五十三条；《实施条例》第三十九条至第四十一条。本系统不提供、不建议任何与其他投标人协调报价的方案。</p>
@@ -531,7 +613,7 @@
               </td>
             </tr>
           </template>
-          <tr x-show="schemeList.length === 0">
+          <tr :style="{ display: schemeList.length === 0 ? '' : 'none' }">
             <td colspan="7" class="empty">暂无方案</td>
           </tr>
         </tbody>
@@ -564,17 +646,17 @@
 
 <!-- 脚本加载顺序：BDSS 核心模块先行（确保 window.bdssApp 就绪），Alpine 最后加载启动 -->
 <script src="data/defaults.js"></script>
-<script src="data/examples.js"></script>
-<script src="js/config.js"></script>
-<script src="js/rng.js"></script>
-<script src="js/model.js"></script>
-<script src="js/simulator.js"></script>
-<script src="js/analyzer.js"></script>
-<script src="js/storage.js"></script>
-<script src="js/worker-manager.js"></script>
-<script src="js/ui.js"></script>
-<script src="js/selftest.js"></script>
-<script src="js/app.js"></script>
+<script src="data/examples.js?v=2"></script>
+<script src="js/config.js?v=2"></script>
+<script src="js/rng.js?v=2"></script>
+<script src="js/model.js?v=2"></script>
+<script src="js/simulator.js?v=2"></script>
+<script src="js/analyzer.js?v=3"></script>
+<script src="js/storage.js?v=2"></script>
+<script src="js/worker-manager.js?v=2"></script>
+<script src="js/ui.js?v=4"></script>
+<script src="js/selftest.js?v=2"></script>
+<script src="js/app.js?v=4"></script>
 <!-- CDN 依赖：ECharts（图表，离线时自动降级为表格）+ Alpine（最后加载，启动时 bdssApp 已就绪） -->
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>

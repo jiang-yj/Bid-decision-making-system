@@ -121,6 +121,7 @@
       id: config.uid(),
       type: 'uniform',
       params: { min: 0.85, max: 0.99 },
+      name: '',
       group: 'A'
     };
   };
@@ -180,6 +181,25 @@
     } else if (s.pricingModel.type === 'D') {
       var comps = s.pricingModel.params.components;
       if (!comps || comps.length === 0) errors.push('模型D复合权重组件不能为空');
+    } else if (s.pricingModel.type === 'B') {
+      var pmb = s.pricingModel.params;
+      if (pmb.trimMode === 'piecewise') {
+        if (!Array.isArray(pmb.segments) || pmb.segments.length === 0) errors.push('模型B分段规则不能为空');
+        else {
+          pmb.segments.forEach(function (seg, si) {
+            if (seg.minCount === undefined || seg.minCount === null || isNaN(seg.minCount) || seg.minCount < 1)
+              errors.push('模型B分段第 ' + (si + 1) + ' 条：家数下限必须 ≥ 1');
+            if (seg.trimLow === undefined || seg.trimLow === null || isNaN(seg.trimLow) || seg.trimLow < 0)
+              errors.push('模型B分段第 ' + (si + 1) + ' 条：去最低数必须为非负整数');
+            if (seg.trimHigh === undefined || seg.trimHigh === null || isNaN(seg.trimHigh) || seg.trimHigh < 0)
+              errors.push('模型B分段第 ' + (si + 1) + ' 条：去最高数必须为非负整数');
+          });
+        }
+      } else {
+        var tl = pmb.trimLow, th = pmb.trimHigh;
+        if (tl === undefined || tl === null || isNaN(tl) || tl < 0) errors.push('模型B去掉最低报价数必须为非负整数');
+        if (th === undefined || th === null || isNaN(th) || th < 0) errors.push('模型B去掉最高报价数必须为非负整数');
+      }
     }
 
     // 伙伴
@@ -249,6 +269,21 @@
     def.project = Object.assign(def.project, s.project || {});
     def.pricingModel = Object.assign(def.pricingModel, s.pricingModel || {});
     def.pricingModel.params = s.pricingModel && s.pricingModel.params ? s.pricingModel.params : {};
+    // 模型 B 默认去极值参数
+    if (def.pricingModel.type === 'B') {
+      if (!def.pricingModel.params.trimMode) def.pricingModel.params.trimMode = 'fixed';
+      if (def.pricingModel.params.trimMode === 'fixed') {
+        if (def.pricingModel.params.trimLow === undefined) def.pricingModel.params.trimLow = 1;
+        if (def.pricingModel.params.trimHigh === undefined) def.pricingModel.params.trimHigh = 1;
+      } else if (def.pricingModel.params.trimMode === 'piecewise') {
+        if (!Array.isArray(def.pricingModel.params.segments) || def.pricingModel.params.segments.length === 0) {
+          def.pricingModel.params.segments = [
+            { minCount: 6, trimLow: 1, trimHigh: 1 },
+            { minCount: 1, trimLow: 0, trimHigh: 0 }
+          ];
+        }
+      }
+    }
     def.scoring = Object.assign(def.scoring, s.scoring || {});
     if (s.scoring && s.scoring.segments) def.scoring.segments = s.scoring.segments;
     def.invalidRules = Object.assign(def.invalidRules, s.invalidRules || {});
@@ -286,6 +321,11 @@
       var lo = r.discountMin / 100;
       var hi = r.discountMax / 100;
       var step = r.step / 100;
+      // 防御：步长被清空时 x-model.number 会得到空字符串，''/100 === 0，
+      // 此时 v += 0 为死循环，会撑爆内存导致浏览器崩溃；非法/非正值直接返回空列表
+      if (!isFinite(C) || !isFinite(lo) || !isFinite(hi) || !isFinite(step) || step <= 0) {
+        return [];
+      }
       for (var v = lo; v <= hi + 1e-9; v += step) {
         result.push(Math.round(v * C * 100) / 100);
       }
@@ -304,7 +344,16 @@
       case 'A':
         return '基准价 = 有效报价的算术平均值 = mean(Q₁..Qₙ)';
       case 'B':
-        return '基准价 = 去掉1个最高+1个最低后的算术平均值（≤2家时全量平均）';
+        if (pm.params.trimMode === 'piecewise') {
+          var segs = (pm.params.segments || []).slice().sort(function (a, b) { return b.minCount - a.minCount; });
+          var segStr = segs.map(function (s2) {
+            return 'n≥' + s2.minCount + '→去' + s2.trimHigh + '高' + s2.trimLow + '低';
+          }).join('；');
+          return '基准价 = 分段去极值平均（' + segStr + '，家数不足时退化）';
+        }
+        var tl = (pm.params && pm.params.trimLow) || 0;
+        var th = (pm.params && pm.params.trimHigh) || 0;
+        return '基准价 = 去掉' + th + '个最高+' + tl + '个最低后的算术平均值（家数不足时按可去除数量退化）';
       case 'C':
         return '基准价 = 有效报价平均值 × K(' + (pm.params.K || 0.98) + ')';
       case 'D':

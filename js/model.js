@@ -76,17 +76,44 @@
 
   /**
    * 模型B 去极值平均法
-   * 去掉 1 个最高 + 1 个最低；有效家数 ≤ 2 时不退化，全量平均
+   * 支持两种模式：
+   *  - fixed：始终去掉 trimLow 个最低 + trimHigh 个最高
+   *  - piecewise：按有效家数分段，每段定义 minCount/trimLow/trimHigh，
+   *    匹配第一条 n >= minCount 的规则（minCount 从高到低匹配）
+   * 当家数不足以同时去除时，等比收缩，至少保留 1 家求平均。
    */
   model.basePrice_B = function (Q, p) {
-    var trimLow = (p && p.trimLow) || 1;
-    var trimHigh = (p && p.trimHigh) || 1;
+    p = p || {};
     var n = Q.length;
-    if (n <= 2) return mean(Q); // 不退化
+    if (n === 0) return 0;
+
+    var trimLow, trimHigh;
+    if (p.trimMode === 'piecewise' && Array.isArray(p.segments) && p.segments.length > 0) {
+      // 按 minCount 降序排序，取第一条 n >= minCount 的规则
+      var segs = p.segments.slice().sort(function (a, b) { return b.minCount - a.minCount; });
+      var matched = null;
+      for (var i = 0; i < segs.length; i++) {
+        if (n >= (segs[i].minCount || 0)) { matched = segs[i]; break; }
+      }
+      if (!matched) matched = segs[segs.length - 1];
+      trimLow = parseInt(matched.trimLow, 10);
+      trimHigh = parseInt(matched.trimHigh, 10);
+    } else {
+      // 固定模式（兼容旧方案）
+      trimLow = parseInt(p.trimLow, 10);
+      trimHigh = parseInt(p.trimHigh, 10);
+    }
+    if (isNaN(trimLow) || trimLow < 0) trimLow = 1;
+    if (isNaN(trimHigh) || trimHigh < 0) trimHigh = 1;
+
+    // 家数不足以同时去极值时，等比收缩，至少保留 1 家
+    if (trimLow + trimHigh >= n) {
+      var ratio = (n - 1) / (trimLow + trimHigh);
+      trimLow = Math.floor(trimLow * ratio);
+      trimHigh = Math.floor(trimHigh * ratio);
+    }
     var s = Q.slice().sort(function (a, b) { return a - b; });
-    var lo = Math.min(trimLow, n);
-    var hi = Math.min(trimHigh, n);
-    var remaining = s.slice(lo, n - hi);
+    var remaining = s.slice(trimLow, n - trimHigh);
     if (remaining.length === 0) return mean(Q);
     return mean(remaining);
   };

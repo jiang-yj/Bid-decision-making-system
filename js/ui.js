@@ -19,8 +19,8 @@
     return n.toLocaleString('zh-CN', { minimumFractionDigits: dec, maximumFractionDigits: dec });
   };
 
-  /** 金额单位：'yuan'(元,默认) 或 'wan'(万元) */
-  ui.amountUnit = 'yuan';
+  /** 金额单位：'yuan'(元) 或 'wan'(万元)，默认万元 */
+  ui.amountUnit = 'wan';
 
   /**
    * 按当前金额单位格式化
@@ -54,6 +54,29 @@
   ui.fmtPct = function (v, dec) {
     if (v === null || v === undefined || isNaN(v)) return '-';
     return Number(v).toFixed(dec === undefined ? 2 : dec) + '%';
+  };
+
+  /**
+   * 将文本中的"XX 元"金额按当前金额单位重新格式化
+   * 用于智能分析结论等动态文本
+   */
+  ui._fmtAmountsInText = function (text) {
+    if (!text || ui.amountUnit !== 'wan') return text;
+    // 步骤1：处理旧格式范围 "X ~ Y 元"（最小值没有"元"后缀）
+    text = text.replace(/(\d+(?:\.\d+)?)\s*~\s*(\d+(?:\.\d+)?)\s*元/g, function (match, minStr, maxStr) {
+      var min = parseFloat(minStr);
+      var max = parseFloat(maxStr);
+      if (isNaN(min) || isNaN(max)) return match;
+      var fmt = function (n) { return (n / 1e4).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' 万元'; };
+      return fmt(min) + ' ~ ' + fmt(max);
+    });
+    // 步骤2：处理普通 "X 元" 格式（含千分位逗号）
+    text = text.replace(/(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*元/g, function (match, numStr) {
+      var n = parseFloat(numStr.replace(/,/g, ''));
+      if (isNaN(n)) return match;
+      return (n / 1e4).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' 万元';
+    });
+    return text;
   };
 
   function $(id) { return document.getElementById(id); }
@@ -261,11 +284,19 @@
       });
       html += '</tr></thead><tbody>';
       sortedRows.forEach(function (r) {
-        var cls = (r.__best) ? ' class="best-row"' : '';
+        var clsList = [];
+        if (r.__best) clsList.push('best-row');
+        if (r.__invalid) clsList.push('invalid-row');
+        var cls = clsList.length ? ' class="' + clsList.join(' ') + '"' : '';
         html += '<tr' + cls + '>';
         data.columns.forEach(function (c) {
           var val = r[c];
-          if (typeof val === 'number') val = ui.fmt(val);
+          // 排名相关列：仅"排名"取整；期望排名（均值）、最差排名保留两位小数以便区分
+          if (typeof val === 'number' && c === '排名') {
+            val = Math.round(val);
+          } else if (typeof val === 'number') {
+            val = ui.fmt(val);
+          }
           html += '<td>' + (val === undefined || val === null ? '-' : val) + '</td>';
         });
         html += '</tr>';
@@ -306,22 +337,28 @@
    * ============================================================ */
 
   ui.renderSinglePoint = function (result, currencySymbol) {
-    if (!result) { clearHost('singleTable'); return; }
-    var sym = currencySymbol || '¥';
+    if (!result) return;
     var labels = result.labels || [];
     var ranks = result.ranks || [];
     var rows = (result.results || []).map(function (r, i) {
+      // 是否有效列渲染为下拉框，支持手动废标/恢复（data-idx 对应结果下标，排序后仍可正确回写）
+      var validSelect = '<select class="cell-valid-select" data-idx="' + i + '">' +
+        '<option value="valid"' + (r.valid ? ' selected' : '') + '>有效</option>' +
+        '<option value="invalid"' + (!r.valid ? ' selected' : '') + '>无效</option>' +
+        '</select>';
       return {
-        排名: r.valid ? (ranks[i] || '-') : '-',
+        排名: r.valid ? (ranks[i] ? Math.round(ranks[i]) : '-') : '-',
         投标人: labels[i] || ('投标人' + (i + 1)),
         报价: ui.fmtMoneyVal(r.bid),
-        是否有效: r.valid ? '有效' : '无效',
+        折扣: r.bid ? (r.bid / (result.C_max || 1)).toFixed(5) : '-',
+        是否有效: validSelect,
         得分: r.valid ? r.score : '-',
         失效原因: r.reason || '-',
-        __best: i === 0 && r.valid
+        __best: i === 0 && r.valid,
+        __invalid: !r.valid
       };
     });
-    var columns = ['排名', '投标人', '报价', '是否有效', '得分', '失效原因'];
+    var columns = ['排名', '投标人', '报价', '折扣', '得分', '是否有效', '失效原因'];
     ui.renderTable('singleTable', columns, rows,
       '基准价 B = ' + ui.fmtMoney(result.basePrice) + ' ｜ 我方排名：' + (result.myRank || '-') + ' ｜ 有效家数：' + result.validCount + (result.lowConfidence ? '（低置信）' : ''));
   };
@@ -339,12 +376,19 @@
     var winProbs = stats.map(function (s) { return s.winProb; });
     var expScores = stats.map(function (s) { return s.expectedScore; });
     var best = stats.slice().sort(function (a, b) { return b.winProb - a.winProb; })[0];
+    var Cmax = (scheme && scheme.project && scheme.project.C_max) || 1;
+    // 按候选价下标计算折扣（报价 / 最高限价，保留 5 位小数）
+    var discOf = function (idx) {
+      var c = cands[idx];
+      return c ? (c / Cmax).toFixed(5) : '-';
+    };
 
     // 1) 中标概率曲线（含期望得分副轴）
     ui.renderChart('chartWinProb', {
       title: { text: '中标概率 / 期望得分 vs 报价', left: 'center', textStyle: { fontSize: 13 } },
       tooltip: { trigger: 'axis', formatter: function (p) {
         var s = '报价：' + p[0].axisValue + '<br/>';
+        s += '折扣：' + discOf(p[0].dataIndex) + '<br/>';
         p.forEach(function (it) { s += it.marker + it.seriesName + '：' + it.value + (it.seriesName.indexOf('概率') >= 0 ? '%' : ' 分') + '<br/>'; });
         return s;
       } },
@@ -370,6 +414,7 @@
       title: { text: '得分分布（P10-P50-P90）', left: 'center', textStyle: { fontSize: 13 } },
       tooltip: { trigger: 'axis', formatter: function (p) {
         var s = '报价：' + p[0].axisValue + '<br/>';
+        s += '折扣：' + discOf(p[0].dataIndex) + '<br/>';
         p.forEach(function (it) { s += it.marker + it.seriesName + '：' + it.value + ' 分<br/>'; });
         return s;
       } },
@@ -408,7 +453,12 @@
     });
     ui.renderChart('chartRankDist', {
       title: { text: '排名分布（堆叠%，共100%）', left: 'center', textStyle: { fontSize: 13 } },
-      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: function (p) {
+        var s = '报价：' + p[0].axisValue + '<br/>';
+        s += '折扣：' + discOf(p[0].dataIndex) + '<br/>';
+        p.forEach(function (it) { s += it.marker + it.seriesName + '：' + it.value + '%<br/>'; });
+        return s;
+      } },
       legend: { top: 25 },
       grid: { left: 60, right: 30, top: 55, bottom: 60 },
       xAxis: { type: 'category', data: cands.map(function (c) { return ui.fmtCompact(c); }), axisLabel: { rotate: 30, fontSize: 10 } },
@@ -429,10 +479,11 @@
     var fmtRows = stats.map(function (s, i) {
       return {
         报价: ui.fmtMoneyVal(s.candidate),
+        折扣: s.candidate ? (s.candidate / Cmax).toFixed(5) : '-',
         中标概率: s.winProb + '%',
         期望得分: s.expectedScore,
-        '期望排名（均值）': s.expectedRank,
-        最差排名: s.worstRank,
+        '期望排名（均值）': s.expectedRank ? s.expectedRank : '-',
+        最差排名: s.worstRank ? s.worstRank : '-',
         P10: s.scoreP10,
         P50: s.scoreP50,
         P90: s.scoreP90,
@@ -441,7 +492,7 @@
         __best: i === bestIdx
       };
     });
-    var columns = ['报价', '中标概率', '期望得分', '期望排名（均值）', '最差排名', 'P10', 'P50', 'P90', '标准差', '有效轮数'];
+    var columns = ['报价', '折扣', '中标概率', '期望得分', '期望排名（均值）', '最差排名', 'P10', 'P50', 'P90', '标准差', '有效轮数'];
     ui.renderTable('batchTable', columns, fmtRows, '批量扫描明细（★ 最优候选价）');
   };
 
@@ -494,7 +545,7 @@
         最优报价: ui.fmtMoneyVal(best ? best.candidate : 0),
         中标概率: best ? best.winProb + '%' : '-',
         期望得分: best ? best.expectedScore : '-',
-        '期望排名（均值）': best ? best.expectedRank : '-'
+        '期望排名（均值）': best && best.expectedRank ? best.expectedRank : '-'
       };
     });
     ui.renderTable('scenarioTable', ['场景', '类型', '最优报价', '中标概率', '期望得分', '期望排名（均值）'], rows, '各场景最优候选价对比');
@@ -506,11 +557,35 @@
 
   ui.renderConclusions = function (conclusions, scheme) {
     if (!conclusions) return;
-    var md = (conclusions.recommendations && conclusions.recommendations.text) || '';
+    // 保存原始文本（仅第一次，用于后续单位切换时重新格式化）
+    if (conclusions.recommendations && conclusions.recommendations.text && !conclusions._rawRecommendationsText) {
+      conclusions._rawRecommendationsText = conclusions.recommendations.text;
+    }
+    if (conclusions.robustness && conclusions.robustness.text && !conclusions._rawRobustnessText) {
+      conclusions._rawRobustnessText = conclusions.robustness.text;
+    }
+    var md = conclusions._rawRecommendationsText || (conclusions.recommendations && conclusions.recommendations.text) || '';
+    // 金额单位切换：将文本中的"元"金额按当前单位重新格式化
+    md = ui._fmtAmountsInText(md);
     // 简易 markdown → HTML
     var html = ui.markdownToHtml(md);
     var el = $('conclusionsHtml') || document.querySelector('.concl-card .markdown-body');
     if (el) el.innerHTML = html;
+    // 稳健性分析文本也随单位切换格式化（Alpine x-text 绑定会自动更新）
+    if (conclusions.robustness && conclusions._rawRobustnessText) {
+      conclusions.robustness.text = ui._fmtAmountsInText(conclusions._rawRobustnessText);
+    }
+
+    // 风险提示文本也随单位切换格式化
+    if (conclusions.risks && conclusions.risks.items && conclusions.risks.items.length) {
+      // 保存原始风险提示（仅第一次）
+      if (!conclusions._rawRisksItems) {
+        conclusions._rawRisksItems = conclusions.risks.items.slice();
+      }
+      conclusions.risks.items = conclusions._rawRisksItems.map(function (item) {
+        return ui._fmtAmountsInText(item);
+      });
+    }
 
     // 伙伴表回显（行数据键为英文，需映射为中文表头键，否则单元格取值失败显示 '-'）
     if (conclusions.partnerEcho && conclusions.partnerEcho.hasPartners) {
@@ -521,7 +596,7 @@
           '名称': r.name,
           '启用': r.enabled,
           '设定方式': methodMap[r.method] || r.method,
-          '报价/分布': r.quote,
+          '报价/分布': ui._fmtAmountsInText(r.quote),
           '强制有效': r.forceValid,
           '置信度': r.confidence
         };
@@ -559,10 +634,11 @@
 
   ui.exportCSV = function (stats, scheme, conclusions) {
     if (!stats || stats.length === 0) return;
+    var Cmax = (scheme && scheme.project && scheme.project.C_max) || 1;
     var lines = [];
-    lines.push('报价,中标概率(%),期望得分,期望排名(均值),最差排名,得分P10,得分P50,得分P90,得分标准差,有效轮数,总轮数');
+    lines.push('报价,折扣,中标概率(%),期望得分,期望排名(均值),最差排名,得分P10,得分P50,得分P90,得分标准差,有效轮数,总轮数');
     stats.forEach(function (s) {
-      lines.push([s.candidate, s.winProb, s.expectedScore, s.expectedRank, s.worstRank, s.scoreP10, s.scoreP50, s.scoreP90, s.scoreStd, s.validRounds, s.totalRounds].join(','));
+      lines.push([s.candidate, (s.candidate / Cmax).toFixed(5), s.winProb, s.expectedScore, (s.expectedRank ? s.expectedRank.toFixed(2) : ''), (s.worstRank ? s.worstRank.toFixed(2) : ''), s.scoreP10, s.scoreP50, s.scoreP90, s.scoreStd, s.validRounds, s.totalRounds].join(','));
     });
     if (conclusions && conclusions.recommendations) {
       lines.push('');
@@ -616,18 +692,19 @@
     md.push('');
     md.push('## 批量扫描结果');
     md.push('');
-    md.push('| 报价 | 中标概率(%) | 期望得分 | 期望排名（均值） | 最差排名 | P10 | P50 | P90 | 标准差 | 有效轮数 |');
-    md.push('|---|---|---|---|---|---|---|---|---|---|');
+    md.push('| 报价 | 折扣 | 中标概率(%) | 期望得分 | 期望排名（均值） | 最差排名 | P10 | P50 | P90 | 标准差 | 有效轮数 |');
+    md.push('|---|---|---|---|---|---|---|---|---|---|---|');
     stats.forEach(function (s) {
-      md.push('| ' + ui.fmtMoneyVal(s.candidate) + ' | ' + s.winProb + ' | ' + s.expectedScore + ' | ' + s.expectedRank + ' | ' + s.worstRank + ' | ' + s.scoreP10 + ' | ' + s.scoreP50 + ' | ' + s.scoreP90 + ' | ' + s.scoreStd + ' | ' + s.validRounds + ' |');
+      var disc = s.candidate && scheme && scheme.project && scheme.project.C_max ? (s.candidate / scheme.project.C_max).toFixed(5) : '-';
+      md.push('| ' + ui.fmtMoneyVal(s.candidate) + ' | ' + disc + ' | ' + s.winProb + ' | ' + s.expectedScore + ' | ' + (s.expectedRank ? s.expectedRank.toFixed(2) : '-') + ' | ' + (s.worstRank ? s.worstRank.toFixed(2) : '-') + ' | ' + s.scoreP10 + ' | ' + s.scoreP50 + ' | ' + s.scoreP90 + ' | ' + s.scoreStd + ' | ' + s.validRounds + ' |');
     });
     md.push('');
     if (conclusions && conclusions.recommendations) {
-      md.push(conclusions.recommendations.text);
+      md.push(ui._fmtAmountsInText(conclusions.recommendations.text));
       md.push('');
     }
     if (conclusions && conclusions.robustness) {
-      md.push(conclusions.robustness.text);
+      md.push(ui._fmtAmountsInText(conclusions.robustness.text));
       md.push('');
     }
     if (conclusions && conclusions.risks && conclusions.risks.items) {
@@ -643,7 +720,7 @@
       md.push('|---|---|---|---|---|---|');
       scenarioStats.forEach(function (ss) {
         var best = ss.stats.slice().sort(function (a, b) { return b.winProb - a.winProb; })[0];
-        md.push('| ' + ss.scenario.name + ' | ' + ss.scenario.type + ' | ' + ui.fmtMoneyVal(best ? best.candidate : 0) + ' | ' + (best ? best.winProb : '-') + ' | ' + (best ? best.expectedScore : '-') + ' | ' + (best ? best.expectedRank : '-') + ' |');
+        md.push('| ' + ss.scenario.name + ' | ' + ss.scenario.type + ' | ' + ui.fmtMoneyVal(best ? best.candidate : 0) + ' | ' + (best ? best.winProb : '-') + ' | ' + (best ? best.expectedScore : '-') + ' | ' + (best ? best.expectedRank.toFixed(2) : '-') + ' |');
       });
       md.push('');
     }

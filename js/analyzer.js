@@ -211,15 +211,15 @@
     var lines = [];
     lines.push('## 建议报价分析');
     lines.push('');
-    lines.push('**最优报价点**：' + best.candidate.toFixed(2) + ' 元，中标概率 ' + best.winProb + '%，期望得分 ' + best.expectedScore + ' 分，期望排名 ' + best.expectedRank + '。');
+    lines.push('**最优报价点**：' + best.candidate.toFixed(2) + ' 元，中标概率 ' + best.winProb + '%，期望得分 ' + best.expectedScore + ' 分，期望排名 ' + best.expectedRank.toFixed(2) + '。');
     lines.push('');
     lines.push('**三档建议价**：');
-    lines.push('- 保守档：' + cons.candidate.toFixed(2) + ' 元（期望排名 ' + cons.expectedRank + '，最差排名 ' + cons.worstRank + '，胜率 ' + cons.winProb + '%）');
-    lines.push('- 中性档：' + neut.candidate.toFixed(2) + ' 元（期望排名 ' + neut.expectedRank + '，最差排名 ' + neut.worstRank + '，胜率 ' + neut.winProb + '%）');
-    lines.push('- 激进档：' + aggr.candidate.toFixed(2) + ' 元（期望排名 ' + aggr.expectedRank + '，最差排名 ' + aggr.worstRank + '，胜率 ' + aggr.winProb + '%）');
+    lines.push('- 保守档：' + cons.candidate.toFixed(2) + ' 元（期望排名 ' + cons.expectedRank.toFixed(2) + '，最差排名 ' + cons.worstRank.toFixed(2) + '，胜率 ' + cons.winProb + '%）');
+    lines.push('- 中性档：' + neut.candidate.toFixed(2) + ' 元（期望排名 ' + neut.expectedRank.toFixed(2) + '，最差排名 ' + neut.worstRank.toFixed(2) + '，胜率 ' + neut.winProb + '%）');
+    lines.push('- 激进档：' + aggr.candidate.toFixed(2) + ' 元（期望排名 ' + aggr.expectedRank.toFixed(2) + '，最差排名 ' + aggr.worstRank.toFixed(2) + '，胜率 ' + aggr.winProb + '%）');
     lines.push('');
     if (range) {
-      lines.push('**可接受区间**（中标概率 ≥ ' + threshold + '%）：' + range.min.toFixed(2) + ' ~ ' + range.max.toFixed(2) + ' 元。');
+      lines.push('**可接受区间**（中标概率 ≥ ' + threshold + '%）：' + range.min.toFixed(2) + ' 元 ~ ' + range.max.toFixed(2) + ' 元。');
     } else {
       lines.push('**注意**：当前无候选价满足中标概率 ≥ ' + threshold + '% 阈值，建议调整参数或扩大候选区间。');
     }
@@ -256,7 +256,7 @@
         ? '最优点稳定，相邻报价档位胜率漂移 ' + drift.toFixed(1) + '%。'
         : '最优点不够稳定，相邻档位胜率漂移达 ' + drift.toFixed(1) + '%，建议关注参数敏感性。') +
         (worstAcceptable
-          ? '最差假设下仍可接受的报价带：' + worstAcceptable.min.toFixed(2) + ' ~ ' + worstAcceptable.max.toFixed(2) + ' 元。'
+          ? '最差假设下仍可接受的报价带：' + worstAcceptable.min.toFixed(2) + ' 元 ~ ' + worstAcceptable.max.toFixed(2) + ' 元。'
           : '当前无报价带在最差假设下仍保持可接受胜率。')
     };
   };
@@ -295,7 +295,7 @@
     var activePartners = (scheme.partners || []).filter(function (p) { return p.enabled; });
     if (activePartners.length > 0) {
       var partnerInfo = activePartners.map(function (p) {
-        return p.name + '(' + (p.method === 'fixed' ? p.fixedQuote.toFixed(0) + '元' : p.narrow.center + '%') + (p.forceValid ? ',强制有效' : '') + ')';
+        return p.name + '(' + (p.method === 'fixed' ? p.fixedQuote.toFixed(0) + ' 元' : p.narrow.center + '%') + (p.forceValid ? ',强制有效' : '') + ')';
       }).join(', ');
       risks.push('⚠ 伙伴偏离风险：当前伙伴假设为 [' + partnerInfo + ']，若实际偏离预期，胜率将显著变化。标记"强制有效"的伙伴假设置信度低。');
     }

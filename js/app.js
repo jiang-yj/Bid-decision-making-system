@@ -37,10 +37,14 @@
       // UI 杂项状态
       ui: { complianceDismissed: false },
       sampleText: {},          // 伙伴样本输入文本（按索引）
-      distParamText: {},       // 对手分布参数文本（按索引）
+      partnerQuoteText: {},    // 伙伴固定报价输入文本（按索引，跟随金额显示单位）
+      partnerDiscText: {},     // 伙伴固定报价折扣输入文本（按索引，相对限价）
       strategyListText: '',
       formulaStatus: '',
       customBid: '',           // 单点测算自定义报价（留空则取中间候选价）
+      bMode: 'fixed',          // 模型B去极值模式（顶层属性，确保响应式可靠）
+      modelType: 'A',          // 当前基准价模型类型（顶层属性，确保 x-show 响应式可靠）
+      opponentNamesText: '',   // 对手名称文本（逗号分隔）
 
       // 运行状态
       running: false,
@@ -63,8 +67,8 @@
       // 左侧配置标签页（①~⑨）
       configTab: 'info',
 
-      // 金额显示单位：'yuan'(元,默认) 或 'wan'(万元)
-      amountUnit: 'yuan',
+      // 金额显示单位：'yuan'(元) 或 'wan'(万元)，默认万元
+      amountUnit: 'wan',
 
       /* ------------------------------------------------------
        * 计算属性（getter 形式，Alpine 模板直接访问）
@@ -98,6 +102,11 @@
         // 监听 toast 事件
         BDSS.bus.on('toast', function (msg) { self.showToast(msg); });
 
+        // 全局禁用 number input 滚轮改变值（防止误改）
+        document.addEventListener('wheel', function (e) {
+          if (e.target && e.target.type === 'number') e.preventDefault();
+        }, { passive: false });
+
         // 恢复主题偏好（默认常规模式）
         try { this.darkMode = localStorage.getItem('bdss_theme') === 'dark'; } catch (e) { this.darkMode = false; }
         this._applyTheme();
@@ -110,9 +119,16 @@
           BDSS.storage.installExamples();
           this.refreshSchemeList();
         }
-        if (this.schemeList.length > 0) {
-          var first = this.schemeList[0];
-          this.loadScheme(first.id);
+        // 恢复上次打开的方案，否则载入第一个
+        var lastId = null;
+        try { lastId = localStorage.getItem('bdss_last_scheme_id'); } catch (e) {}
+        var target = null;
+        if (lastId) {
+          target = this.schemeList.find(function (s) { return s.id === lastId; }) || null;
+        }
+        if (!target && this.schemeList.length > 0) target = this.schemeList[0];
+        if (target) {
+          this.loadScheme(target.id);
         }
 
         // 初始化默认分布/策略文本
@@ -122,6 +138,17 @@
         window.addEventListener('beforeunload', function () {
           try { BDSS.workerManager.destroyPool(); } catch (e) {}
         });
+
+        // 单点测算结果表【是否有效】下拉：事件委托绑定（容器固定，表格重渲染不影响监听）
+        var singleTableEl = document.getElementById('singleTable');
+        if (singleTableEl) {
+          singleTableEl.addEventListener('change', function (e) {
+            var t = e.target;
+            if (t && t.classList && t.classList.contains('cell-valid-select')) {
+              self.onSingleValidChange(parseInt(t.getAttribute('data-idx'), 10), t.value);
+            }
+          });
+        }
       },
 
       /* ------------------------------------------------------
@@ -132,7 +159,12 @@
       },
 
       newScheme() {
+        var name = prompt('请输入方案名称：', '新方案 ' + new Date().toLocaleDateString('zh-CN'));
+        if (name === null) return; // 用户取消
+        name = (name || '').trim();
+        if (!name) name = '新方案 ' + new Date().toLocaleDateString('zh-CN');
         this.s = BDSS.config.createDefaultScheme();
+        this.s.meta.name = name;
         this.currentSchemeId = this.s.meta.id;
         this.singleResult = null;
         this.batchStats = null;
@@ -141,12 +173,30 @@
         this.conclusionsHtml = '';
         this.customBid = '';
         this.syncParamTexts();
-        this.showToast('已新建方案，记得保存');
+        this.onPricingModelChange();
+        this.showToast('已新建方案：' + name + '（记得保存）');
       },
 
       loadScheme(id) {
         var s = BDSS.storage.load(id);
         if (!s) { this.showToast('方案加载失败'); return; }
+        // 在赋值给 Alpine 之前确保模型参数完整初始化（避免深层属性新增导致响应式失效）
+        var pm = s.pricingModel;
+        if (pm && pm.type === 'B') {
+          if (!pm.params) pm.params = {};
+          if (!pm.params.trimMode) pm.params.trimMode = 'fixed';
+          if (pm.params.trimMode === 'fixed') {
+            if (pm.params.trimLow === undefined || pm.params.trimLow === null) pm.params.trimLow = 1;
+            if (pm.params.trimHigh === undefined || pm.params.trimHigh === null) pm.params.trimHigh = 1;
+          } else if (pm.params.trimMode === 'piecewise') {
+            if (!Array.isArray(pm.params.segments) || pm.params.segments.length === 0) {
+              pm.params.segments = [
+                { minCount: 6, trimLow: 1, trimHigh: 1 },
+                { minCount: 1, trimLow: 0, trimHigh: 0 }
+              ];
+            }
+          }
+        }
         this.s = s;
         this.currentSchemeId = id;
         // 恢复缓存的结果（如有）
@@ -154,7 +204,7 @@
           this.batchStats = s.results.batch;
           this.conclusions = s.results.conclusions;
           this.conclusionsHtml = (this.conclusions && this.conclusions.recommendations)
-            ? BDSS.ui.markdownToHtml(this.conclusions.recommendations.text) : '';
+            ? BDSS.ui.markdownToHtml(BDSS.ui._fmtAmountsInText(this.conclusions.recommendations.text)) : '';
           // 重新渲染缓存结果（图表内部会在容器可见后自动重试初始化）
           BDSS.ui.renderBatchResults(this.batchStats, s);
           if (this.conclusions) BDSS.ui.renderConclusions(this.conclusions, s);
@@ -164,6 +214,7 @@
           this.conclusionsHtml = '';
         }
         this.singleResult = s.results && s.results.single ? s.results.single : null;
+        if (this.singleResult && !this.singleResult.C_max) this.singleResult.C_max = s.project.C_max;
         this.scenarioStats = s.results && s.results.scenarios ? s.results.scenarios : null;
         if (this.singleResult) {
           var cur0 = BDSS.defaults.currencies.find(function (c) { return c.code === s.project.currency; });
@@ -173,6 +224,8 @@
           BDSS.ui.renderScenarioComparison(this.scenarioStats, s);
         }
         this.syncParamTexts();
+        this.onPricingModelChange(); // 确保模型参数（如模型B的trimMode/trimLow/trimHigh/segments）已初始化
+        try { localStorage.setItem('bdss_last_scheme_id', id); } catch (e) {}
         this.showToast('已载入：' + s.meta.name);
       },
 
@@ -280,10 +333,49 @@
        * ------------------------------------------------------ */
       addPartner() {
         this.s.partners.push(BDSS.config.createDefaultPartner('伙伴' + (this.s.partners.length + 1)));
+        var idx = this.s.partners.length - 1;
+        var p = this.s.partners[idx];
+        this.partnerQuoteText[idx] = this._fmtQuoteText(p.fixedQuote);
+        this.partnerDiscText[idx] = this._fmtDiscText(p.fixedQuote);
+      },
+
+      removePartner(i) {
+        this.s.partners.splice(i, 1);
+        // 删除后索引前移，重建按索引的输入文本映射（报价/折扣/样本）
+        this.syncParamTexts();
       },
 
       addDist() {
-        this.s.opponents.distributions.push(BDSS.config.createDefaultDist());
+        var d = BDSS.config.createDefaultDist();
+        if (d.type === 'empirical') d.params._samplesText = '';
+        this.s.opponents.distributions.push(d);
+      },
+
+      /** 对手分布类型切换时，保留已有参数、仅补全缺失默认值 */
+      onDistTypeChange(d) {
+        if (!d.params) d.params = {};
+        if (d.type === 'uniform') {
+          if (d.params.min === undefined) d.params.min = 0.85;
+          if (d.params.max === undefined) d.params.max = 0.99;
+        } else if (d.type === 'normal') {
+          if (d.params.mean === undefined) d.params.mean = 0.90;
+          if (d.params.std === undefined) d.params.std = 0.03;
+        } else if (d.type === 'triangular') {
+          if (d.params.a === undefined) d.params.a = 0.85;
+          if (d.params.b === undefined) d.params.b = 0.92;
+          if (d.params.c === undefined) d.params.c = 0.99;
+        } else if (d.type === 'empirical') {
+          if (!d.params.samples) d.params.samples = [];
+          d.params._samplesText = (d.params.samples || []).join(',');
+        }
+      },
+
+      /** 解析经验分布样本文本 */
+      parseEmpiricalSamples(i) {
+        var d = this.s.opponents.distributions[i];
+        if (!d || !d.params) return;
+        var txt = (d.params._samplesText || '').trim();
+        d.params.samples = txt.split(/[,，\s]+/).filter(Boolean).map(Number).filter(function (n) { return !isNaN(n); });
       },
 
       addScenario() {
@@ -297,11 +389,40 @@
 
       onPricingModelChange() {
         var pm = this.s.pricingModel;
+        this.modelType = pm.type; // 同步到顶层属性，确保 x-show 响应式可靠
         if (pm.type === 'D' && (!pm.params.components || pm.params.components.length === 0)) {
           pm.params.components = [{ w: 0.5, src: 'C_max' }, { w: 0.5, src: 'avg' }];
         }
         if (pm.type === 'C' && !pm.params.K) pm.params.K = 0.98;
         if (pm.type === 'custom' && !pm.params.formula) pm.params.formula = 'mean(Q)*0.98';
+        if (pm.type === 'B') {
+          if (!pm.params.trimMode) pm.params.trimMode = 'fixed';
+          if (pm.params.trimMode === 'fixed') {
+            if (pm.params.trimLow === undefined || pm.params.trimLow === null) pm.params.trimLow = 1;
+            if (pm.params.trimHigh === undefined || pm.params.trimHigh === null) pm.params.trimHigh = 1;
+          } else if (pm.params.trimMode === 'piecewise') {
+            if (!Array.isArray(pm.params.segments) || pm.params.segments.length === 0) {
+              pm.params.segments = [
+                { minCount: 6, trimLow: 1, trimHigh: 1 },
+                { minCount: 1, trimLow: 0, trimHigh: 0 }
+              ];
+            }
+          }
+          // 同步到顶层属性，确保 x-show 响应式可靠
+          this.bMode = pm.params.trimMode;
+        }
+      },
+
+      addBSegment() {
+        var pm = this.s.pricingModel;
+        if (!Array.isArray(pm.params.segments)) pm.params.segments = [];
+        pm.params.segments.push({ minCount: 1, trimLow: 0, trimHigh: 0 });
+      },
+
+      removeBSegment(i) {
+        var segs = this.s.pricingModel.params.segments;
+        if (segs && segs.length > 1) segs.splice(i, 1);
+        else this.showToast('至少保留一条分段规则');
       },
 
       validateFormula() {
@@ -316,25 +437,69 @@
       syncParamTexts() {
         var self = this;
         this.sampleText = {};
+        this.partnerQuoteText = {};
+        this.partnerDiscText = {};
         this.s.partners.forEach(function (p, i) {
           if (p.samples && p.samples.length) self.sampleText[i] = p.samples.join(',');
-        });
-        this.distParamText = {};
-        this.s.opponents.distributions.forEach(function (d, i) {
-          self.distParamText[i] = self._distParamsToString(d);
+          self.partnerQuoteText[i] = self._fmtQuoteText(p.fixedQuote);
+          self.partnerDiscText[i] = self._fmtDiscText(p.fixedQuote);
         });
         if (this.s.strategy.candidateMode === 'list' && this.s.strategy.list) {
           this.strategyListText = this.s.strategy.list.join(',');
         }
+        // 同步对手名称文本（逗号分隔）
+        this.opponentNamesText = (this.s.opponents.distributions || []).map(function (d) { return d.name || ''; }).join(',');
       },
 
-      _distParamsToString(d) {
-        var p = d.params || {};
-        if (d.type === 'uniform') return 'min=' + p.min + ',max=' + p.max;
-        if (d.type === 'normal') return 'mean=' + p.mean + ',std=' + p.std;
-        if (d.type === 'triangular') return 'a=' + p.a + ',b=' + p.b + ',c=' + p.c;
-        if (d.type === 'empirical') return 'samples=' + ((p.samples || []).slice(0, 5).join(';')) + (p.samples && p.samples.length > 5 ? '...' : '');
-        return '';
+      /** 伙伴固定报价 → 按当前金额单位格式化的输入文本（元 原值 / 万元 ÷1e4） */
+      _fmtQuoteText(v) {
+        if (v === null || v === undefined || isNaN(v)) return '';
+        var n = Number(v);
+        if (this.amountUnit === 'wan') return String(parseFloat((n / 1e4).toFixed(6)));
+        return String(parseFloat(n.toFixed(2)));
+      },
+
+      /** 伙伴固定报价 → 折扣文本（报价 / 限价，5 位小数） */
+      _fmtDiscText(v) {
+        var C = this.s && this.s.project ? this.s.project.C_max : 0;
+        if (!C || v === null || v === undefined || isNaN(v)) return '';
+        return (Number(v) / C).toFixed(5);
+      },
+
+      /** 伙伴固定报价输入：按当前金额单位解析为元，并联动刷新折扣文本 */
+      onPartnerQuoteInput(i) {
+        var p = this.s.partners[i];
+        if (!p) return;
+        var txt = (this.partnerQuoteText[i] || '').trim().replace(/[,\s]/g, '');
+        var n = parseFloat(txt);
+        var yuan = (txt === '' || isNaN(n)) ? 0 : (this.amountUnit === 'wan' ? n * 1e4 : n);
+        p.fixedQuote = Math.round(yuan * 100) / 100;
+        this.partnerDiscText[i] = this._fmtDiscText(p.fixedQuote);
+      },
+
+      /** 伙伴折扣输入：支持折扣率（0.965）或百分数（96.5），联动刷新金额文本 */
+      onPartnerDiscInput(i) {
+        var p = this.s.partners[i];
+        if (!p) return;
+        var txt = (this.partnerDiscText[i] || '').trim().replace(/[,\s%]/g, '');
+        var d = parseFloat(txt);
+        if (txt === '' || isNaN(d) || d <= 0) {
+          p.fixedQuote = 0;
+          this.partnerQuoteText[i] = this._fmtQuoteText(0);
+          return;
+        }
+        if (d > 2) d = d / 100; // >2 视为百分数写法
+        var C = this.s.project.C_max || 0;
+        p.fixedQuote = Math.round(d * C * 100) / 100;
+        this.partnerQuoteText[i] = this._fmtQuoteText(p.fixedQuote);
+      },
+
+      /** 限价变化后刷新所有伙伴折扣显示（固定报价为绝对值，折扣为派生显示） */
+      refreshPartnerDiscTexts() {
+        var self = this;
+        (this.s.partners || []).forEach(function (p, i) {
+          self.partnerDiscText[i] = self._fmtDiscText(p.fixedQuote);
+        });
       },
 
       parseSamples(i) {
@@ -343,27 +508,20 @@
         this.s.partners[i].samples = txt.split(/[,，\s]+/).filter(Boolean).map(Number).filter(function (n) { return !isNaN(n); });
       },
 
-      parseDistParams(i) {
-        var txt = (this.distParamText[i] || '').trim();
-        var d = this.s.opponents.distributions[i];
-        if (!d || !txt) return;
-        // 解析 key=value,key2=value2
-        var kv = {};
-        txt.split(/[,，\s]+/).forEach(function (pair) {
-          var m = pair.split('=');
-          if (m.length === 2) kv[m[0].trim()] = isNaN(Number(m[1])) ? m[1].trim() : Number(m[1]);
-        });
-        var p = d.params || (d.params = {});
-        for (var k in kv) p[k] = kv[k];
-        if (d.type === 'empirical' && typeof kv.samples === 'string') {
-          p.samples = kv.samples.split(';').map(Number).filter(function (n) { return !isNaN(n); });
-        }
-      },
-
       parseStrategyList() {
         var txt = (this.strategyListText || '').trim();
         if (!txt) { this.s.strategy.list = []; return; }
         this.s.strategy.list = txt.split(/[,，\s]+/).filter(Boolean).map(Number).filter(function (n) { return !isNaN(n); });
+      },
+
+      /** 解析对手名称文本到各分布的 name 字段 */
+      parseOpponentNames() {
+        var txt = (this.opponentNamesText || '').trim();
+        var names = txt.split(/[,，]/).map(function (s) { return s.trim(); });
+        var dists = this.s.opponents.distributions || [];
+        for (var i = 0; i < dists.length; i++) {
+          dists[i].name = names[i] || '';
+        }
       },
 
       /* ------------------------------------------------------
@@ -395,7 +553,8 @@
             this.showToast('自定义报价无效，请输入大于 0 的金额');
             return;
           }
-          myBid = customNum;
+          // 输入值按当前金额显示模式解释：万元模式下需 ×10000 换算为元
+          myBid = this.amountUnit === 'wan' ? customNum * 1e4 : customNum;
         } else {
           myBid = cands[Math.floor(cands.length / 2)];
         }
@@ -414,9 +573,12 @@
           labels.push(partners[pi].name || ('伙伴' + (pi + 1)));
         }
         for (var oi = 0; oi < oppBids.length; oi++) {
-          labels.push('对手' + (oi + 1));
+          var dist = s.opponents.distributions[oi % s.opponents.distributions.length];
+          var distName = dist && dist.name ? dist.name.trim() : '';
+          labels.push(distName || ('对手' + (oi + 1)));
         }
         result.labels = labels;
+        result.C_max = s.project.C_max;
 
         // 计算所有有效投标人的排名（分数降序，同分报价低者优先）
         var validIdx = [];
@@ -438,6 +600,84 @@
         var cur = BDSS.defaults.currencies.find(function (c) { return c.code === s.project.currency; });
         BDSS.ui.renderSinglePoint(result, cur ? cur.symbol : '¥');
         this.showToast('单点测算完成（候选价 ' + BDSS.ui.fmtMoney(myBid, 0) + '）');
+      },
+
+      /* ------------------------------------------------------
+       * 单点测算结果：手动修改某行有效性（有效/无效）
+       * 手动无效时失效原因显示「手动废标」，并基于剩余有效报价重算基准价/得分/排名
+       * ------------------------------------------------------ */
+      onSingleValidChange(idx, val) {
+        var res = this.singleResult;
+        if (!res || !res.results || !res.results[idx]) return;
+        if (val !== 'valid' && val !== 'invalid') return;
+        // 首次手动修改前快照自动计算结果，作为还原与重算基准
+        if (!res._autoSnapshot) {
+          res._autoSnapshot = JSON.parse(JSON.stringify({
+            results: res.results, ranks: res.ranks, basePrice: res.basePrice,
+            myRank: res.myRank, validCount: res.validCount, lowConfidence: res.lowConfidence
+          }));
+        }
+        if (!res.manualOverride) res.manualOverride = {};
+        // 选择与自动结果一致时移除覆盖（恢复自动判定及原始失效原因）
+        var autoVal = res._autoSnapshot.results[idx].valid ? 'valid' : 'invalid';
+        if (val === autoVal) delete res.manualOverride[idx];
+        else res.manualOverride[idx] = val;
+        this._recomputeSingle();
+        var cur = BDSS.defaults.currencies.find(function (c) { return c.code === this.s.project.currency; }, this);
+        BDSS.ui.renderSinglePoint(res, cur ? cur.symbol : '¥');
+      },
+
+      /** 基于 _autoSnapshot + manualOverride 重算单点结果（基准价、得分、排名、有效家数） */
+      _recomputeSingle() {
+        var res = this.singleResult;
+        if (!res || !res._autoSnapshot) return;
+        var s = this.s;
+        var ov = res.manualOverride || {};
+        var autoResults = res._autoSnapshot.results;
+        var C_max = res.C_max || s.project.C_max;
+        var rules = BDSS.model.prepareRules(s);
+
+        var validFlags = autoResults.map(function (r, i) {
+          if (ov[i] === 'valid') return true;
+          if (ov[i] === 'invalid') return false;
+          return r.valid;
+        });
+        var validBids = [];
+        validFlags.forEach(function (f, i) { if (f) validBids.push(autoResults[i].bid); });
+        var validCount = validBids.length;
+        var B = validCount > 0 ? BDSS.model.basePrice(validBids, s.pricingModel, C_max) : 0;
+
+        var newResults = autoResults.map(function (r, i) {
+          var valid = validFlags[i];
+          var reason;
+          if (ov[i] === 'invalid') reason = '手动废标';
+          else if (ov[i] === 'valid') reason = '';
+          else reason = r.reason;
+          return {
+            bid: r.bid,
+            score: valid ? BDSS.model.score(r.bid, B, s.scoring) : 0,
+            valid: valid,
+            reason: reason
+          };
+        });
+
+        // 排名（与 runSinglePoint 同一规则：得分降序，同分报价低者优先）
+        var validIdx = [];
+        newResults.forEach(function (r, i) { if (r.valid) validIdx.push(i); });
+        validIdx.sort(function (a, b) {
+          var sa = newResults[a].score, sb = newResults[b].score;
+          if (Math.abs(sa - sb) > 1e-9) return sb - sa;
+          return newResults[a].bid - newResults[b].bid;
+        });
+        var ranks = new Array(newResults.length).fill(0);
+        validIdx.forEach(function (ri, k) { ranks[ri] = k + 1; });
+
+        res.results = newResults;
+        res.ranks = ranks;
+        res.basePrice = B;
+        res.myRank = (newResults[0] && newResults[0].valid) ? ranks[0] : 0;
+        res.validCount = validCount;
+        res.lowConfidence = validCount < rules.minValidBidders;
       },
 
       runBatch() {
@@ -475,7 +715,8 @@
             };
           }
           self.conclusions = conclusions;
-          self.conclusionsHtml = BDSS.ui.markdownToHtml(conclusions.recommendations.text);
+          var recText = conclusions.recommendations && conclusions.recommendations.text ? conclusions.recommendations.text : '';
+          self.conclusionsHtml = BDSS.ui.markdownToHtml(BDSS.ui._fmtAmountsInText(recText));
           // 渲染
           BDSS.ui.renderBatchResults(stats, scheme);
           BDSS.ui.renderConclusions(conclusions, scheme);
@@ -642,10 +883,30 @@
        * 金额单位切换
        * ------------------------------------------------------ */
       setAmountUnit(unit) {
+        if (unit === this.amountUnit) return;
+        var prev = this.amountUnit;
+        // 切换单位前，将自定义报价输入框中的数值同步换算（元 ↔ 万元）
+        var bidTxt = (this.customBid || '').trim();
+        if (bidTxt) {
+          var bidNum = parseFloat(bidTxt.replace(/[,\s]/g, ''));
+          if (!isNaN(bidNum) && bidNum > 0) {
+            var bidYuan = prev === 'wan' ? bidNum * 1e4 : bidNum;
+            var bidNew = unit === 'wan' ? bidYuan / 1e4 : bidYuan;
+            this.customBid = String(parseFloat(bidNew.toFixed(6)));
+          }
+        }
+        // 同步刷新所有伙伴固定报价输入文本（金额显示跟随单位）
+        var self = this;
+        (this.s.partners || []).forEach(function (p, i) {
+          if (p.fixedQuote && p.fixedQuote > 0) {
+            self.partnerQuoteText[i] = unit === 'wan'
+              ? String(parseFloat((p.fixedQuote / 1e4).toFixed(6)))
+              : String(parseFloat(p.fixedQuote.toFixed(2)));
+          }
+        });
         this.amountUnit = unit;
         BDSS.ui.amountUnit = unit;
         // 重新渲染表格类结果（图表不随金额开关切换）
-        var self = this;
         this.$nextTick(function () {
           if (self.singleResult) {
             var cur = BDSS.defaults.currencies.find(function (c) { return c.code === self.s.project.currency; });
@@ -655,22 +916,30 @@
           if (self.batchStats) {
             var bs = self.batchStats;
             var bestIdx = bs.indexOf(bs.slice().sort(function(a,b){return b.winProb-a.winProb;})[0]);
+            var Cmax = self.s.project.C_max || 1;
             BDSS.ui.renderTable('batchTable',
-              ['报价', '中标概率', '期望得分', '期望排名（均值）', '最差排名', 'P10', 'P50', 'P90', '标准差', '有效轮数'],
+              ['报价', '折扣', '中标概率', '期望得分', '期望排名（均值）', '最差排名', 'P10', 'P50', 'P90', '标准差', '有效轮数'],
               bs.map(function (s, i) {
                 return {
                   报价: BDSS.ui.fmtMoneyVal(s.candidate),
+                  折扣: s.candidate ? (s.candidate / Cmax).toFixed(5) : '-',
                   中标概率: s.winProb + '%',
                   期望得分: s.expectedScore,
-                  '期望排名（均值）': s.expectedRank,
-                  最差排名: s.worstRank,
+                  '期望排名（均值）': s.expectedRank ? s.expectedRank : '-',
+                  最差排名: s.worstRank ? s.worstRank : '-',
                   P10: s.scoreP10, P50: s.scoreP50, P90: s.scoreP90,
                   标准差: s.scoreStd, 有效轮数: s.validRounds,
                   __best: i === bestIdx
                 };
               }), '批量扫描明细（★ 最优候选价）');
           }
-          if (self.conclusions) BDSS.ui.renderConclusions(self.conclusions, self.s);
+          // 智能分析结论也随单位切换重新格式化（包含建议报价+稳健性分析）
+          if (self.conclusions) {
+            BDSS.ui.renderConclusions(self.conclusions, self.s);
+            // 同步更新 Alpine 绑定的 conclusionsHtml，确保 x-html 区域刷新
+            var recRaw = self.conclusions._rawRecommendationsText || (self.conclusions.recommendations && self.conclusions.recommendations.text) || '';
+            self.conclusionsHtml = BDSS.ui.markdownToHtml(BDSS.ui._fmtAmountsInText(recRaw));
+          }
         });
       },
 

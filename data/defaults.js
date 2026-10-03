@@ -8,7 +8,7 @@
   BDSS.defaults = {
     /** 合规提示文案（首页 + 报告页均须展示，不可永久关闭） */
     complianceNotice:
-      '本系统仅基于用户自行输入的假设进行敏感性分析，不提供、不建议任何与其他投标人协调报价的方案；' +
+      '声明：本系统仅基于用户自行输入的假设进行敏感性分析，不提供、不建议任何与其他投标人协调报价的方案；' +
       '模拟结果不构成对评标结果的承诺，实际以招标文件与评标委员会结论为准。',
 
     /** 币种列表 */
@@ -64,10 +64,10 @@
 
     /** 对手分布类型 */
     opponentDistTypes: [
-      { value: 'uniform', label: '均匀 [L, U]' },
-      { value: 'normal', label: '正态 N(μ, σ)' },
-      { value: 'triangular', label: '三角 (min, mode, max)' },
-      { value: 'empirical', label: '经验样本列表' }
+      { value: 'uniform', label: '均匀' },
+      { value: 'normal', label: '正态' },
+      { value: 'triangular', label: '三角' },
+      { value: 'empirical', label: '经验样本' }
     ],
 
     /** 场景类型 */
