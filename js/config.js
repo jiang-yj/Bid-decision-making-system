@@ -72,6 +72,7 @@
             group: 'A'
           }
         ],
+        names: [],
         csv: ''
       },
 
@@ -290,6 +291,10 @@
     def.partners = s.partners || [];
     def.opponents = Object.assign(def.opponents, s.opponents || {});
     if (s.opponents && s.opponents.distributions) def.opponents.distributions = s.opponents.distributions;
+    // 对手名称数组（按对手索引，与 count 对应）；旧方案缺失时从 distributions.name 回填或置空
+    if (!Array.isArray(def.opponents.names)) {
+      def.opponents.names = (def.opponents.distributions || []).map(function (d) { return d && d.name ? d.name : ''; });
+    }
     def.strategy = Object.assign(def.strategy, s.strategy || {});
     if (s.strategy && s.strategy.range) def.strategy.range = Object.assign(def.strategy.range, s.strategy.range);
     if (s.strategy && s.strategy.list) def.strategy.list = s.strategy.list;

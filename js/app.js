@@ -447,8 +447,8 @@
         if (this.s.strategy.candidateMode === 'list' && this.s.strategy.list) {
           this.strategyListText = this.s.strategy.list.join(',');
         }
-        // 同步对手名称文本（逗号分隔）
-        this.opponentNamesText = (this.s.opponents.distributions || []).map(function (d) { return d.name || ''; }).join(',');
+        // 同步对手名称文本（逗号分隔，按对手索引）
+        this.opponentNamesText = (this.s.opponents.names || []).join(',');
       },
 
       /** 伙伴固定报价 → 按当前金额单位格式化的输入文本（元 原值 / 万元 ÷1e4） */
@@ -514,14 +514,11 @@
         this.s.strategy.list = txt.split(/[,，\s]+/).filter(Boolean).map(Number).filter(function (n) { return !isNaN(n); });
       },
 
-      /** 解析对手名称文本到各分布的 name 字段 */
+      /** 解析对手名称文本到 s.opponents.names 数组（按对手索引，与 count 对应） */
       parseOpponentNames() {
         var txt = (this.opponentNamesText || '').trim();
-        var names = txt.split(/[,，]/).map(function (s) { return s.trim(); });
-        var dists = this.s.opponents.distributions || [];
-        for (var i = 0; i < dists.length; i++) {
-          dists[i].name = names[i] || '';
-        }
+        if (!txt) { this.s.opponents.names = []; return; }
+        this.s.opponents.names = txt.split(/[,，]/).map(function (s) { return s.trim(); });
       },
 
       /* ------------------------------------------------------
@@ -573,9 +570,9 @@
           labels.push(partners[pi].name || ('伙伴' + (pi + 1)));
         }
         for (var oi = 0; oi < oppBids.length; oi++) {
-          var dist = s.opponents.distributions[oi % s.opponents.distributions.length];
-          var distName = dist && dist.name ? dist.name.trim() : '';
-          labels.push(distName || ('对手' + (oi + 1)));
+          var oppName = (s.opponents.names || [])[oi];
+          if (!oppName) oppName = '对手' + (oi + 1);
+          labels.push(oppName);
         }
         result.labels = labels;
         result.C_max = s.project.C_max;

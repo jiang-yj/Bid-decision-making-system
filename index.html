@@ -303,7 +303,7 @@
       <h3 class="config-sec-title">⑥ 随机对手</h3>
       <div class="form-grid">
         <label>随机对手数量<input x-model.number="s.opponents.count" type="number" step="1" /></label>
-        <label class="full">对手名称（逗号分隔，对应分布顺序）
+        <label class="full">对手名称（逗号分隔，按对手顺序）
           <input x-model="opponentNamesText" @input="parseOpponentNames()" placeholder="对手1,对手2,对手3..." />
         </label>
         <div class="full">
