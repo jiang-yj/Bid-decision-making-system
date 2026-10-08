@@ -1,0 +1,9 @@
+{
+  "name": "bid-decision-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "投标决策系统",
+  "scripts": {
+    "start": "npx serve ."
+  }
+}
