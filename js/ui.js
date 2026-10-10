@@ -260,12 +260,18 @@
       var sortedRows = data.rows.slice();
       var activeCol = null;
       for (var k in state) { if (state[k]) { activeCol = k; break; } }
-      if (activeCol && state[activeCol]) {
-        var dir = state[activeCol] === 'desc' ? -1 : 1;
-        sortedRows.sort(function (a, b) {
+      sortedRows.sort(function (a, b) {
+        // 废标单位（__invalid）始终排在有效单位之后
+        var ai = a.__invalid ? 1 : 0;
+        var bi = b.__invalid ? 1 : 0;
+        if (ai !== bi) return ai - bi;
+
+        if (activeCol && state[activeCol]) {
+          var dir = state[activeCol] === 'desc' ? -1 : 1;
           return dir * (extractNum(a[activeCol]) - extractNum(b[activeCol]));
-        });
-      }
+        }
+        return 0;
+      });
 
       var html = data.title ? '<h4 style="margin:0 0 6px;font-size:0.85rem;">' + data.title + '</h4>' : '';
       html += '<table><thead><tr>';
